@@ -1,16 +1,34 @@
-# Voice Checkpoint
+<div align="center">
 
-> **Think out loud. Change your mind. Keep every version.**
+# 🎙️ Voice Checkpoint
 
-Voice Checkpoint is a voice-first decision workspace that treats a conversation like version control. Speak a plan, branch into an alternative, compare the two, merge only the part you want, and undo any change without losing the reasoning that led there.
+### Think out loud. Change your mind. Keep every version.
 
-The demo uses a Goa trip because the result is easy to see, but the state engine is generic. The same graph can manage product requirements, event plans, budgets, research decisions, hiring criteria, or any other structured decision.
+**Voice-native version control for decisions.** Speak a plan, branch into an alternative, compare versions, merge one detail, and undo without losing your reasoning.
 
-🎬 **[Download and watch the narrated two-minute demo](https://github.com/AnshulAlgoS/Voice-Checkpoint/releases/download/demo-v1/voice-checkpoint-demo.mp4)** · [Release page](https://github.com/AnshulAlgoS/Voice-Checkpoint/releases/tag/demo-v1)
+<a href="https://github.com/AnshulAlgoS/Voice-Checkpoint/releases/download/demo-v1/voice-checkpoint-demo.mp4">
+  <img src="evidence/voice-checkpoint-preview.gif" width="800" alt="Animated Voice Checkpoint demo showing fork, compare, selective merge, and undo" />
+</a>
 
-The full 1080p MP4 is published as a GitHub Release asset so it opens without the repository file viewer's size limitation.
+<br />
 
-## The problem
+[![Tests](https://img.shields.io/badge/tests-64%20passing-2ea44f?style=for-the-badge)](#proof)
+[![Voice input](https://img.shields.io/badge/voice%20input-LiveKit-06b6d4?style=for-the-badge)](#architecture)
+[![Voice output](https://img.shields.io/badge/voice%20output-Rime-f5c542?style=for-the-badge)](#architecture)
+[![State](https://img.shields.io/badge/state-immutable%20graph-a855f7?style=for-the-badge)](#architecture)
+
+**[▶ Watch with narration](https://github.com/AnshulAlgoS/Voice-Checkpoint/releases/download/demo-v1/voice-checkpoint-demo.mp4)** · **[🎙 Run it yourself](#try-it)** · **[🧠 Explore the architecture](#architecture)** · **[🧪 See the evidence](RIME_EVIDENCE.md)**
+
+</div>
+
+---
+
+Voice Checkpoint treats a conversation like version control. The demo uses a Goa trip because the result is easy to see, but the state engine is generic. The same graph can manage product requirements, event plans, budgets, research decisions, hiring criteria, or any other structured decision.
+
+> [!TIP]
+> Click the animated preview to download the full 1080p narrated demo. Expand the sections below to inspect the live voice path and its guarantees.
+
+## 🧭 Why this exists
 
 Voice assistants usually overwrite context. When someone says “try a more comfortable version,” the old plan disappears into chat history. A later request such as “keep the original budget, but take the new hotel” forces the assistant to reconstruct state from prose and hope it understood the references correctly.
 
@@ -23,7 +41,7 @@ Voice Checkpoint makes those changes explicit:
 - Selective merge copies only the requested fields.
 - Undo restores the exact graph snapshot, including the active checkpoint.
 
-## The USP
+## ✨ What makes it different
 
 Most voice products optimize the conversation. Voice Checkpoint protects the **decision state behind the conversation**.
 
@@ -38,7 +56,12 @@ Most voice products optimize the conversation. Voice Checkpoint protects the **d
 
 This makes voice safe for exploratory work. Users can ask “what if?”, inspect the consequences, keep one detail, and return to any previous decision without starting over.
 
-## Winning demo flow
+## 🎬 See the state graph move
+
+<details open>
+<summary><strong>▶ Run the seven spoken moves</strong></summary>
+
+<br />
 
 Say these commands in order:
 
@@ -52,7 +75,11 @@ Say these commands in order:
 
 The decisive moment is step five. The active branch adopts **Taj Fort Aguada** from the comfort branch while keeping the original **₹40,000 budget** and **Konkan Express**. Undo then restores the complete pre-merge graph exactly. Version two remains available throughout.
 
-## How it works
+</details>
+
+<a id="architecture"></a>
+
+## 🧠 Explore the system
 
 ```mermaid
 flowchart LR
@@ -70,6 +97,11 @@ flowchart LR
     L[Generation gate] -. rejects stale turns .-> E
     L -. cancels stale audio .-> J
 ```
+
+<details>
+<summary><strong>Open the integration deep dive</strong></summary>
+
+<br />
 
 ### 1. LiveKit carries realtime speech
 
@@ -127,7 +159,11 @@ Every turn receives a monotonically increasing generation token. Starting a newe
 
 This prevents the classic realtime race where a slow response from an old command speaks over or mutates a newer decision.
 
-## Run it and speak yourself
+</details>
+
+<a id="try-it"></a>
+
+## 🎙️ Try it yourself
 
 ### Requirements
 
@@ -169,6 +205,11 @@ Open [http://localhost:3000](http://localhost:3000), then:
 
 You can also type into the same command box and click **Resolve & Speak**. Typed and spoken commands pass through the same resolver, state engine, generation gate, and Rime output path.
 
+<details>
+<summary><strong>🛠 Microphone troubleshooting</strong></summary>
+
+<br />
+
 ## Why the microphone may appear to do nothing
 
 Running `npm run dev` starts only the website. It does not start the Python transcription worker. In that state, the browser may connect and publish audio, but nobody is present in the room to turn that audio into text. Use `npm run dev:voice` for an interactive voice session.
@@ -181,6 +222,13 @@ Running `npm run dev` starts only the website. It does not start the Python tran
 | Browser denies the microphone | Site permission is blocked | Allow microphone access for `http://localhost:3000`, then click the mic again |
 | Transcript appears but no voice plays | Rime request failed or playback was blocked | Check the web terminal for the Rime request status and interact with the page once |
 | Only half a sentence resolves | Pause between phrases exceeded the final-segment window | Speak the command continuously; the adapter combines segments within 1.5 seconds |
+
+</details>
+
+<details>
+<summary><strong>🔐 Environment variables and secret boundaries</strong></summary>
+
+<br />
 
 ## Environment variables
 
@@ -200,7 +248,11 @@ Running `npm run dev` starts only the website. It does not start the Python tran
 
 All credentials stay in ignored `.env.local`. The token route issues a short-lived room token to the browser. The LiveKit API secret and Rime API key remain server-side.
 
-## Engine guarantees
+</details>
+
+<a id="proof"></a>
+
+## 🧪 Proof, not promises
 
 The automated suite proves these behaviors:
 
@@ -227,6 +279,11 @@ python -m py_compile voice_agent.py
 
 The repository currently contains **64 deterministic tests**, including the full acceptance path and regressions for “₹60,000 and prioritize comfort” and “a trip to Kerala in fifty thousand rupees.” Live credential verification notes are documented in [RIME_EVIDENCE.md](RIME_EVIDENCE.md).
 
+<details>
+<summary><strong>🗂 Browse the project structure</strong></summary>
+
+<br />
+
 ## Project structure
 
 ```text
@@ -244,7 +301,9 @@ voice_agent.py           LiveKit STT-only worker
 evidence/                narrated demo video
 ```
 
-## Technology
+</details>
+
+## 🧩 Technology
 
 - **React 19** for the interactive workspace
 - **Vinext and Vite** for the application and server routes
@@ -255,6 +314,11 @@ evidence/                narrated demo video
 - **Tailwind CSS and Base UI** for the interface
 - **Node’s test runner** for deterministic state and pipeline tests
 
+<details>
+<summary><strong>🧱 Inspect the phase boundaries</strong></summary>
+
+<br />
+
 ## Phase boundaries
 
 The system is deliberately layered so integrations can evolve without weakening state correctness:
@@ -264,3 +328,5 @@ The system is deliberately layered so integrations can evolve without weakening 
 - **Phase 3:** LiveKit microphone input, STT worker, Rime output, interruption, and the polished demo UI
 
 The Phase 1 API remains stable underneath every later integration. Voice is an interface to the engine, never a replacement for it.
+
+</details>
