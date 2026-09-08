@@ -11,6 +11,7 @@
     "start": "wrangler dev --config dist/server/wrangler.json",
     "test": "node --test --experimental-strip-types tests/*.test.ts",
     "test:acceptance": "node --test --experimental-strip-types --test-name-pattern='Phase 1 acceptance' tests/*.test.ts",
+    "test:phase2": "node --test --experimental-strip-types --test-name-pattern='Phase 2' tests/*.test.ts",
     "lint": "oxlint",
     "format": "oxfmt"
   },
