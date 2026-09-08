@@ -1,31 +1,21 @@
-import type {
-  Room,
-  RemoteAudioTrack,
-  RemoteParticipant,
-  RemoteTrack,
-  RemoteTrackPublication,
-} from 'livekit-client';
-
 export interface VoiceOutputHandle {
   id: string;
 }
-
 export interface VoiceOutputContext {
   generation: string;
   checkpointId: string | null;
 }
-
+export interface VoiceOutputStatus {
+  playing: boolean;
+  activeHandleId: string | null;
+  lastSpoken: string | null;
+  error?: string | null;
+}
 export interface VoiceOutputProvider {
   readonly kind: 'rime' | 'mock';
   speak(text: string, context: VoiceOutputContext): Promise<VoiceOutputHandle>;
   cancel(handleId: string): Promise<void>;
   getStatus(): VoiceOutputStatus;
-}
-
-export interface VoiceOutputStatus {
-  playing: boolean;
-  activeHandleId: string | null;
-  lastSpoken: string | null;
 }
 
 interface MockUtterance {
@@ -40,21 +30,22 @@ interface MockUtterance {
 
 export class MockVoiceOutputProvider implements VoiceOutputProvider {
   readonly kind = 'mock' as const;
-
   private readonly utterances = new Map<string, MockUtterance>();
-  private readonly spokenLog: Array<{ id: string; text: string; context: VoiceOutputContext }> = [];
+  private readonly spokenLog: Array<{
+    id: string;
+    text: string;
+    context: VoiceOutputContext;
+  }> = [];
   private activeHandleId: string | null = null;
   private lastSpoken: string | null = null;
   private nextId = 0;
   private readonly delayMs: number;
-
   constructor(options: { delayMs?: number } = {}) {
     this.delayMs = options.delayMs ?? 0;
   }
-
   reserveHandle(): string {
     const id = `mock-${++this.nextId}`;
-    const utterance: MockUtterance = {
+    this.utterances.set(id, {
       id,
       text: '',
       context: { generation: '', checkpointId: null },
@@ -62,28 +53,24 @@ export class MockVoiceOutputProvider implements VoiceOutputProvider {
       resolved: false,
       startedAt: Date.now(),
       reserved: true,
-    };
-    this.utterances.set(id, utterance);
+    });
     this.activeHandleId = id;
     return id;
   }
-
-  async speak(text: string, context: VoiceOutputContext): Promise<VoiceOutputHandle> {
-    let id: string | null = null;
-    let utterance: MockUtterance | null = null;
-    for (const [key, u] of this.utterances) {
-      if (u.reserved && !u.resolved) {
-        id = key;
-        utterance = u;
-        utterance.reserved = false;
-        utterance.text = text;
-        utterance.context = context;
-        break;
-      }
-    }
-    if (!id || !utterance) {
-      id = `mock-${++this.nextId}`;
-      utterance = {
+  async speak(
+    text: string,
+    context: VoiceOutputContext,
+  ): Promise<VoiceOutputHandle> {
+    let entry = [...this.utterances.values()].find(
+      (item) => item.reserved && !item.resolved,
+    );
+    if (entry) {
+      entry.reserved = false;
+      entry.text = text;
+      entry.context = context;
+    } else {
+      const id = `mock-${++this.nextId}`;
+      entry = {
         id,
         text,
         context,
@@ -91,57 +78,44 @@ export class MockVoiceOutputProvider implements VoiceOutputProvider {
         resolved: false,
         startedAt: Date.now(),
       };
-      this.utterances.set(id, utterance);
+      this.utterances.set(id, entry);
     }
-    this.activeHandleId = id;
-
+    this.activeHandleId = entry.id;
     if (this.delayMs > 0) {
       const start = Date.now();
-      while (Date.now() - start < this.delayMs) {
-        if (utterance.cancelled) break;
-        await new Promise((r) => setTimeout(r, Math.min(5, this.delayMs)));
-      }
+      while (Date.now() - start < this.delayMs && !entry.cancelled)
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(5, this.delayMs)),
+        );
     }
-
-    if (utterance.cancelled) {
-      utterance.resolved = true;
-      if (this.activeHandleId === id) this.activeHandleId = null;
-      return { id };
+    entry.resolved = true;
+    if (!entry.cancelled) {
+      this.spokenLog.push({ id: entry.id, text, context });
+      this.lastSpoken = text;
     }
-
-    utterance.resolved = true;
-    this.spokenLog.push({ id, text, context });
-    this.lastSpoken = text;
-    if (this.activeHandleId === id) this.activeHandleId = null;
-    return { id };
+    if (this.activeHandleId === entry.id) this.activeHandleId = null;
+    return { id: entry.id };
   }
-
   async cancel(handleId: string): Promise<void> {
-    const utterance = this.utterances.get(handleId);
-    if (utterance && !utterance.resolved) {
-      utterance.cancelled = true;
-    }
+    const entry = this.utterances.get(handleId);
+    if (entry && !entry.resolved) entry.cancelled = true;
     if (this.activeHandleId === handleId) this.activeHandleId = null;
   }
-
   getStatus(): VoiceOutputStatus {
     return {
       playing: this.activeHandleId !== null,
       activeHandleId: this.activeHandleId,
       lastSpoken: this.lastSpoken,
+      error: null,
     };
   }
-
-  getSpokenLog(): ReadonlyArray<{ id: string; text: string; context: VoiceOutputContext }> {
+  getSpokenLog() {
     return [...this.spokenLog];
   }
-
   getCancelledCount(): number {
-    let count = 0;
-    for (const u of this.utterances.values()) if (u.cancelled) count += 1;
-    return count;
+    return [...this.utterances.values()].filter((item) => item.cancelled)
+      .length;
   }
-
   clearHistory(): void {
     this.utterances.clear();
     this.spokenLog.length = 0;
@@ -151,363 +125,229 @@ export class MockVoiceOutputProvider implements VoiceOutputProvider {
 }
 
 export interface RimeProviderOptions {
-  livekitUrl?: string;
-  livekitApiKey?: string;
-  livekitApiSecret?: string;
+  endpoint?: string;
   rimeModel?: string;
   rimeVoice?: string;
   language?: string;
+  audioFormat?: string;
+  forceMock?: boolean;
+  mockDelayMs?: number;
+  livekitUrl?: string;
+  livekitApiKey?: string;
+  livekitApiSecret?: string;
   tokenEndpoint?: string;
   roomName?: string;
   participantName?: string;
 }
-
-function readEnv(key: string): string | undefined {
-  try {
-    const processEnv = (globalThis as unknown as { process?: { env?: Record<string, string> } }).process?.env;
-    if (processEnv) {
-      const v = processEnv[key];
-      if (v && v.length) return v;
-    }
-  } catch { /* noop */ }
-  try {
-    const meta = (globalThis as unknown as { import?: { meta?: { env?: Record<string, string> } } }).import?.meta?.env;
-    if (meta) {
-      const direct = meta[key];
-      if (direct && direct.length) return direct;
-      if (key === 'LIVEKIT_URL') {
-        const alt1 = meta.VITE_LIVEKIT_URL;
-        const alt2 = meta.NEXT_PUBLIC_LIVEKIT_URL;
-        const alt3 = meta.PUBLIC_LIVEKIT_URL;
-        if (alt1 && alt1.length) return alt1;
-        if (alt2 && alt2.length) return alt2;
-        if (alt3 && alt3.length) return alt3;
-      }
-      if (key === 'RIME_MODEL') {
-        const alt = meta.VITE_RIME_MODEL;
-        if (alt && alt.length) return alt;
-      }
-      if (key === 'RIME_VOICE') {
-        const alt = meta.VITE_RIME_VOICE;
-        if (alt && alt.length) return alt;
-      }
-      if (key === 'RIME_LANGUAGE') {
-        const alt = meta.VITE_RIME_LANGUAGE;
-        if (alt && alt.length) return alt;
-      }
-    }
-  } catch { /* noop */ }
-  return undefined;
-}
-
-function isBrowserRuntime(): boolean {
-  return typeof window !== 'undefined' && typeof document !== 'undefined';
-}
-
-interface ActiveRimePlayback {
+interface ActivePlayback {
   id: string;
-  audioElement: HTMLAudioElement | null;
-  mediaSource: MediaSource | null;
-  room: Room | null;
-  roomCleanup: Array<() => void>;
+  controller: AbortController;
+  audio: HTMLAudioElement | null;
+  objectUrl: string | null;
   cancelled: boolean;
-  attachedTrack: RemoteAudioTrack | null;
+  reserved: boolean;
 }
 
 export class RimeVoiceOutputProvider implements VoiceOutputProvider {
   readonly kind = 'rime' as const;
-
-  private readonly opts: Required<Pick<RimeProviderOptions, 'rimeModel' | 'rimeVoice' | 'language' | 'tokenEndpoint' | 'roomName' | 'participantName'>> &
-    Partial<Pick<RimeProviderOptions, 'livekitUrl' | 'livekitApiKey' | 'livekitApiSecret'>>;
-
+  private readonly endpoint: string;
+  private readonly config: {
+    model: string;
+    voice: string;
+    language: string;
+    audioFormat: string;
+  };
   private nextId = 0;
   private activeHandleId: string | null = null;
   private lastSpoken: string | null = null;
-  private readonly playback = new Map<string, ActiveRimePlayback>();
-
+  private error: string | null = null;
+  private readonly playbacks = new Map<string, ActivePlayback>();
   constructor(options: RimeProviderOptions = {}) {
-    this.opts = {
-      rimeModel: options.rimeModel ?? readEnv('RIME_MODEL') ?? 'rime-1',
-      rimeVoice: options.rimeVoice ?? readEnv('RIME_VOICE') ?? 'af_sky',
-      language: options.language ?? readEnv('RIME_LANGUAGE') ?? 'en-IN',
-      tokenEndpoint: options.tokenEndpoint ?? '/api/livekit-token',
-      roomName: options.roomName ?? 'voice-checkpoint',
-      participantName: options.participantName ?? `tts-listener-${Date.now()}`,
-      livekitUrl: options.livekitUrl ?? readEnv('LIVEKIT_URL'),
-      livekitApiKey: options.livekitApiKey ?? readEnv('LIVEKIT_API_KEY'),
-      livekitApiSecret: options.livekitApiSecret ?? readEnv('LIVEKIT_API_SECRET'),
+    this.endpoint = options.endpoint ?? '/api/rime-tts';
+    this.config = {
+      model: options.rimeModel ?? 'coda',
+      voice: options.rimeVoice ?? 'celeste',
+      language: options.language ?? 'en',
+      audioFormat: options.audioFormat ?? 'mp3',
     };
   }
-
   getConfig() {
     return {
-      model: this.opts.rimeModel,
-      voice: this.opts.rimeVoice,
-      language: this.opts.language,
-      livekitUrl: this.opts.livekitUrl ?? null,
-      hasCredentials: Boolean(this.opts.livekitApiKey && this.opts.livekitApiSecret && this.opts.livekitUrl),
+      ...this.config,
+      endpoint: this.endpoint,
+      livekitUrl: null,
+      hasCredentials: false,
     };
   }
-
-  private async fetchToken(): Promise<string> {
-    const endpoint = new URL(this.opts.tokenEndpoint, typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
-    endpoint.searchParams.set('room', this.opts.roomName);
-    endpoint.searchParams.set('participant', this.opts.participantName);
-    const res = await fetch(endpoint.toString(), {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
+  reserveHandle(): string {
+    const id = `rime-${++this.nextId}`;
+    this.playbacks.set(id, {
+      id,
+      controller: new AbortController(),
+      audio: null,
+      objectUrl: null,
+      cancelled: false,
+      reserved: true,
     });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(`Token endpoint failed: ${res.status} ${(body as { error?: string }).error ?? res.statusText}`);
-    }
-    const json = (await res.json()) as { token: string };
-    if (!json.token) throw new Error('Token endpoint returned no token.');
-    return json.token;
+    this.activeHandleId = id;
+    return id;
   }
-
-  private async tryBrowserTts(text: string, handle: ActiveRimePlayback): Promise<void> {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-      await new Promise((r) => setTimeout(r, 10));
-      return;
-    }
-    return new Promise<void>((resolve) => {
-      try {
-        const utterance = new SpeechSynthesisUtterance(text);
-        utterance.lang = this.opts.language;
-        const voices = speechSynthesis.getVoices();
-        const preferredVoice =
-          voices.find((v) => v.lang === this.opts.language) ??
-          voices.find((v) => v.lang.startsWith(this.opts.language.split('-')[0])) ??
-          null;
-        if (preferredVoice) utterance.voice = preferredVoice;
-        const finish = () => {
-          try { utterance.onend = null; } catch { /* noop */ }
-          try { utterance.onerror = null; } catch { /* noop */ }
-          resolve();
-        };
-        utterance.onend = finish;
-        utterance.onerror = finish;
-        const startPoll = () => {
-          if (handle.cancelled) {
-            try { speechSynthesis.cancel(); } catch { /* noop */ }
-            finish();
-            return;
-          }
-          if (!handle.cancelled && speechSynthesis.speaking) {
-            setTimeout(startPoll, 40);
-          }
-        };
-        utterance.onstart = () => startPoll();
-        speechSynthesis.speak(utterance);
-        const failSafe = setTimeout(() => {
-          if (!handle.cancelled) finish();
-        }, Math.max(3000, text.length * 80));
-        const cleanupOnCancel = () => {
-          clearTimeout(failSafe);
-        };
-        handle.roomCleanup.push(cleanupOnCancel);
-      } catch {
-        resolve();
-      }
-    });
-  }
-
-  private cleanupPlayback(handleId: string): void {
-    const pb = this.playback.get(handleId);
-    if (!pb) return;
-    pb.cancelled = true;
-    for (const fn of pb.roomCleanup) { try { fn(); } catch { /* noop */ } }
-    pb.roomCleanup = [];
-    if (pb.attachedTrack) {
-      try { pb.attachedTrack.detach(); } catch { /* noop */ }
-      pb.attachedTrack = null;
-    }
-    if (pb.audioElement) {
-      try { pb.audioElement.pause(); } catch { /* noop */ }
-      try { pb.audioElement.removeAttribute('src'); } catch { /* noop */ }
-      try { pb.audioElement.load(); } catch { /* noop */ }
-      pb.audioElement = null;
-    }
-    if (pb.mediaSource) {
-      try {
-        if (pb.mediaSource.readyState === 'open') pb.mediaSource.endOfStream();
-      } catch { /* noop */ }
-      pb.mediaSource = null;
-    }
-    if (pb.room) {
-      try { pb.room.disconnect(); } catch { /* noop */ }
-      pb.room = null;
-    }
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      try { speechSynthesis.cancel(); } catch { /* noop */ }
-    }
-  }
-
-  async speak(text: string, context: VoiceOutputContext): Promise<VoiceOutputHandle> {
-    if (!this.opts.livekitUrl || !this.opts.livekitApiKey || !this.opts.livekitApiSecret) {
-      throw new Error(
-        'RimeVoiceOutputProvider: LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must be configured.',
-      );
+  private takePlayback(): ActivePlayback {
+    const reserved = [...this.playbacks.values()].find(
+      (item) => item.reserved && !item.cancelled,
+    );
+    if (reserved) {
+      reserved.reserved = false;
+      return reserved;
     }
     const id = `rime-${++this.nextId}`;
-    const pb: ActiveRimePlayback = {
+    const playback: ActivePlayback = {
       id,
-      audioElement: null,
-      mediaSource: null,
-      room: null,
-      roomCleanup: [],
+      controller: new AbortController(),
+      audio: null,
+      objectUrl: null,
       cancelled: false,
-      attachedTrack: null,
+      reserved: false,
     };
-    this.playback.set(id, pb);
+    this.playbacks.set(id, playback);
+    return playback;
+  }
+  async speak(
+    text: string,
+    context: VoiceOutputContext,
+  ): Promise<VoiceOutputHandle> {
+    const playback = this.takePlayback();
+    const { id } = playback;
     this.activeHandleId = id;
+    this.error = null;
+    console.info('[Rime] request started', {
+      requestId: id,
+      generation: context.generation,
+      model: this.config.model,
+      voice: this.config.voice,
+    });
     try {
-      void context;
-      this.lastSpoken = text;
-
-      const hasLiveKitEnv = Boolean(this.opts.livekitUrl && typeof window !== 'undefined');
-      if (hasLiveKitEnv) {
-        let RoomCtor: typeof Room | null = null;
-        let RoomEventCtor: typeof import('livekit-client').RoomEvent | null = null;
-        let TrackKind: typeof import('livekit-client').Track | null = null;
-        try {
-          const lk = await import('livekit-client');
-          RoomCtor = lk.Room;
-          RoomEventCtor = lk.RoomEvent;
-          TrackKind = lk.Track;
-        } catch {
-          RoomCtor = null;
-        }
-
-        if (RoomCtor && RoomEventCtor && TrackKind) {
-          let token: string | null = null;
-          try {
-            token = await this.fetchToken();
-          } catch {
-            token = null;
-          }
-
-          if (token && this.opts.livekitUrl && !pb.cancelled) {
-            const room = new RoomCtor({
-              adaptiveStream: true,
-              dynacast: true,
-            });
-            pb.room = room;
-
-            let audioEl: HTMLAudioElement | null = null;
-            if (typeof document !== 'undefined') {
-              try {
-                audioEl = document.createElement('audio');
-                audioEl.autoplay = true;
-                audioEl.setAttribute('playsinline', 'true');
-                audioEl.setAttribute('preload', 'auto');
-                pb.audioElement = audioEl;
-              } catch { /* noop */ }
-            }
-
-            const onTrackSubscribed = (
-              track: RemoteTrack,
-              _pub: RemoteTrackPublication,
-              _participant: RemoteParticipant,
-            ) => {
-              if (pb.cancelled) return;
-              if (track.kind === TrackKind!.Kind.Audio && audioEl) {
-                try {
-                  const remoteAudio = track as RemoteAudioTrack;
-                  remoteAudio.attach(audioEl);
-                  pb.attachedTrack = remoteAudio;
-                } catch { /* noop */ }
-              }
-            };
-            const onDisconnect = () => {
-              /* disconnection is handled via cancel / cleanup */
-            };
-            type RoomEventKey = keyof import('livekit-client').RoomEventCallbacks;
-            room.on(RoomEventCtor.TrackSubscribed as RoomEventKey, onTrackSubscribed as never);
-            room.on(RoomEventCtor.Disconnected as RoomEventKey, onDisconnect as never);
-            pb.roomCleanup.push(() => {
-              try { room.off(RoomEventCtor!.TrackSubscribed as RoomEventKey, onTrackSubscribed as never); } catch { /* noop */ }
-              try { room.off(RoomEventCtor!.Disconnected as RoomEventKey, onDisconnect as never); } catch { /* noop */ }
-            });
-
-            try {
-              await room.connect(this.opts.livekitUrl, token);
-            } catch {
-              /* room connect failure — fall through to browser TTS fallback */
-              this.cleanupPlayback(id);
-              pb.cancelled = false;
-            }
-
-            if (pb.room && !pb.cancelled) {
-              await new Promise<void>((resolve) => {
-                const timeoutMs = Math.max(6000, text.length * 80);
-                const timeout = setTimeout(() => resolve(), timeoutMs);
-                const pollInterval = setInterval(() => {
-                  if (pb.cancelled) {
-                    clearInterval(pollInterval);
-                    clearTimeout(timeout);
-                    resolve();
-                  }
-                }, 50);
-                pb.roomCleanup.push(() => {
-                  clearInterval(pollInterval);
-                  clearTimeout(timeout);
-                });
-              });
-            }
-          }
-        }
+      const response = await fetch(this.endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'audio/mpeg, audio/wav;q=0.9',
+        },
+        body: JSON.stringify({
+          text,
+          generation: context.generation,
+          checkpointId: context.checkpointId,
+        }),
+        signal: playback.controller.signal,
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(
+          payload.error ?? `Rime request failed with status ${response.status}`,
+        );
       }
-
-      if (!pb.cancelled) {
-        await this.tryBrowserTts(text, pb);
+      if (playback.cancelled) {
+        console.info('[Rime] stale response discarded', {
+          requestId: id,
+          generation: context.generation,
+        });
+        return { id };
+      }
+      if (typeof Audio === 'undefined' || typeof URL === 'undefined')
+        throw new Error('Audio playback requires a browser.');
+      const blob = await response.blob();
+      if (playback.cancelled) {
+        console.info('[Rime] stale response discarded', {
+          requestId: id,
+          generation: context.generation,
+        });
+        return { id };
+      }
+      playback.objectUrl = URL.createObjectURL(blob);
+      playback.audio = new Audio(playback.objectUrl);
+      playback.audio.preload = 'auto';
+      console.info('[Rime] playback started', {
+        requestId: id,
+        generation: context.generation,
+      });
+      await new Promise<void>((resolve, reject) => {
+        const audio = playback.audio!;
+        audio.onended = () => resolve();
+        audio.onerror = () =>
+          reject(
+            new Error('The browser could not play the Rime audio response.'),
+          );
+        audio.play().catch(reject);
+      });
+      if (!playback.cancelled) this.lastSpoken = text;
+    } catch (cause) {
+      if (
+        playback.cancelled ||
+        (cause instanceof DOMException && cause.name === 'AbortError')
+      )
+        console.info('[Rime] playback stopped', {
+          requestId: id,
+          generation: context.generation,
+          reason: 'cancelled',
+        });
+      else {
+        this.error = cause instanceof Error ? cause.message : String(cause);
+        console.error('[Rime] request failed', {
+          requestId: id,
+          generation: context.generation,
+          error: this.error,
+        });
+        throw cause;
       }
     } finally {
-      if (this.activeHandleId === id) this.activeHandleId = null;
-      this.cleanupPlayback(id);
+      this.release(playback);
     }
     return { id };
   }
-
-  async cancel(handleId: string): Promise<void> {
-    const pb = this.playback.get(handleId);
-    if (pb) {
-      this.cleanupPlayback(handleId);
+  private release(playback: ActivePlayback): void {
+    if (playback.audio) {
+      playback.audio.pause();
+      playback.audio.removeAttribute('src');
+      playback.audio.load();
+      playback.audio = null;
     }
-    if (this.activeHandleId === handleId) this.activeHandleId = null;
+    if (playback.objectUrl && typeof URL !== 'undefined') {
+      URL.revokeObjectURL(playback.objectUrl);
+      playback.objectUrl = null;
+    }
+    if (this.activeHandleId === playback.id) this.activeHandleId = null;
+    this.playbacks.delete(playback.id);
   }
-
+  async cancel(handleId: string): Promise<void> {
+    const playback = this.playbacks.get(handleId);
+    if (!playback) return;
+    playback.cancelled = true;
+    playback.controller.abort();
+    if (playback.audio) playback.audio.pause();
+    console.info('[Rime] cancellation', { requestId: handleId });
+    this.release(playback);
+  }
   getStatus(): VoiceOutputStatus {
     return {
       playing: this.activeHandleId !== null,
       activeHandleId: this.activeHandleId,
       lastSpoken: this.lastSpoken,
+      error: this.error,
     };
   }
 }
 
 export function hasRimeCredentials(options: RimeProviderOptions = {}): boolean {
-  const url = options.livekitUrl ?? readEnv('LIVEKIT_URL');
-  if (!url) return false;
-  const key = options.livekitApiKey ?? readEnv('LIVEKIT_API_KEY');
-  const secret = options.livekitApiSecret ?? readEnv('LIVEKIT_API_SECRET');
-  if (isBrowserRuntime()) {
-    return Boolean(url) || Boolean(key && secret);
-  }
-  return Boolean(url && key && secret);
+  if (options.forceMock) return false;
+  if (options.endpoint) return true;
+  return Boolean(typeof process !== 'undefined' && process.env?.RIME_API_KEY);
 }
-
 export function createVoiceOutputProvider(
-  options: RimeProviderOptions & { forceMock?: boolean; mockDelayMs?: number } = {},
+  options: RimeProviderOptions = {},
 ): VoiceOutputProvider {
-  if (options.forceMock) return new MockVoiceOutputProvider({ delayMs: options.mockDelayMs });
-  if (hasRimeCredentials(options)) {
-    try {
-      return new RimeVoiceOutputProvider(options);
-    } catch {
-      return new MockVoiceOutputProvider({ delayMs: options.mockDelayMs });
-    }
-  }
-  return new MockVoiceOutputProvider({ delayMs: options.mockDelayMs });
+  if (options.forceMock)
+    return new MockVoiceOutputProvider({ delayMs: options.mockDelayMs });
+  return new RimeVoiceOutputProvider(options);
 }

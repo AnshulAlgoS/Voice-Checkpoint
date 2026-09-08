@@ -1,14 +1,20 @@
-import { AccessToken } from 'livekit-server-sdk';
+import {
+  AccessToken,
+  RoomAgentDispatch,
+  RoomConfiguration,
+} from 'livekit-server-sdk';
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const roomName = url.searchParams.get('room') ?? 'voice-checkpoint';
-  const participantName = url.searchParams.get('participant') ?? `user-${Date.now()}`;
+  const participantName =
+    url.searchParams.get('participant') ?? `user-${Date.now()}`;
 
   const apiKey = process.env.LIVEKIT_API_KEY;
   const apiSecret = process.env.LIVEKIT_API_SECRET;
+  const livekitUrl = process.env.LIVEKIT_URL;
 
-  if (!apiKey || !apiSecret) {
+  if (!apiKey || !apiSecret || !livekitUrl) {
     return Response.json(
       { error: 'LiveKit credentials not configured on the server.' },
       { status: 503 },
@@ -19,7 +25,7 @@ export async function GET(request: Request) {
     const at = new AccessToken(apiKey, apiSecret, {
       identity: participantName,
       name: participantName,
-      ttl: '1h',
+      ttl: '10m',
     });
     at.addGrant({
       roomJoin: true,
@@ -28,8 +34,20 @@ export async function GET(request: Request) {
       canSubscribe: true,
       canPublishData: true,
     });
+    at.roomConfig = new RoomConfiguration({
+      agents: [
+        new RoomAgentDispatch({
+          agentName:
+            process.env.LIVEKIT_AGENT_NAME ?? 'voice-checkpoint-transcriber',
+          metadata: JSON.stringify({ source: 'voice-checkpoint-web' }),
+        }),
+      ],
+    });
     const token = await at.toJwt();
-    return Response.json({ token });
+    return Response.json(
+      { token, url: livekitUrl, room: roomName, participant: participantName },
+      { headers: { 'Cache-Control': 'no-store' } },
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return Response.json(

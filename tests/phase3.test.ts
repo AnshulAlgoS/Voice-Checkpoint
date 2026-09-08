@@ -13,6 +13,10 @@ import {
   type VoiceOutputContext,
 } from '../lib/voice/VoiceOutputProvider.ts';
 import { VoicePipeline } from '../lib/voice/VoicePipeline.ts';
+import { getRimeServerConfig, RIME_DEFAULTS } from '../lib/voice/RimeConfig.ts';
+import { LiveKitSttProvider } from '../lib/voice/VoiceInputProvider.ts';
+import { POST as synthesizeRime } from '../app/api/rime-tts/route.ts';
+import { GET as createLiveKitToken } from '../app/api/livekit-token/route.ts';
 import {
   createDemoGraph,
   DEMO_SEQUENCE,
@@ -22,7 +26,10 @@ import {
 import type { GenerationToken } from '../lib/voice/types.ts';
 import type { GraphSnapshot } from '../lib/state/types.ts';
 
-function snapshotsEquivalent(a: GraphSnapshot<TripState>, b: GraphSnapshot<TripState>): boolean {
+function snapshotsEquivalent(
+  a: GraphSnapshot<TripState>,
+  b: GraphSnapshot<TripState>,
+): boolean {
   if (a.activeCheckpointId !== b.activeCheckpointId) return false;
   if (a.checkpoints.length !== b.checkpoints.length) return false;
   for (let i = 0; i < a.checkpoints.length; i += 1) {
@@ -33,7 +40,10 @@ function snapshotsEquivalent(a: GraphSnapshot<TripState>, b: GraphSnapshot<TripS
     if (ca.branchId !== cb.branchId) return false;
     if (ca.label !== cb.label) return false;
     if (ca.versionNumber !== cb.versionNumber) return false;
-    if (JSON.stringify(ca.structuredState) !== JSON.stringify(cb.structuredState)) return false;
+    if (
+      JSON.stringify(ca.structuredState) !== JSON.stringify(cb.structuredState)
+    )
+      return false;
     if (ca.userInstruction !== cb.userInstruction) return false;
     if (ca.summary !== cb.summary) return false;
   }
@@ -54,7 +64,13 @@ function buildPipeline(mockDelayMs = 0): {
   const orch = new VoiceOrchestrator<TripState>(resolver, gate);
   const planner = new ResponsePlanner<TripState>();
   const provider = new MockVoiceOutputProvider({ delayMs: mockDelayMs });
-  const pipeline = new VoicePipeline<TripState>(orch, planner, provider, gate, engine);
+  const pipeline = new VoicePipeline<TripState>(
+    orch,
+    planner,
+    provider,
+    gate,
+    engine,
+  );
   return { gate, orch, provider, planner, engine, pipeline };
 }
 
@@ -83,7 +99,7 @@ test('Phase 3 MockVoiceOutputProvider: cancel before resolution drops utterance'
   assert.ok(provider.getCancelledCount() >= 1);
 });
 
-test('Phase 3 createVoiceOutputProvider falls back to mock without env vars', () => {
+test('Phase 3 createVoiceOutputProvider supports explicit test mock mode', () => {
   const p = createVoiceOutputProvider({ forceMock: true });
   assert.equal(p.kind, 'mock');
 });
@@ -93,7 +109,10 @@ test('Phase 3 hasRimeCredentials returns false by default in tests', () => {
 });
 
 test('Phase 3 RimeVoiceOutputProvider implements the interface', () => {
-  const p = new RimeVoiceOutputProvider({ rimeModel: 'rime-1', rimeVoice: 'af_sky' });
+  const p = new RimeVoiceOutputProvider({
+    rimeModel: 'rime-1',
+    rimeVoice: 'af_sky',
+  });
   assert.equal(p.kind, 'rime');
   assert.equal(typeof p.speak, 'function');
   assert.equal(typeof p.cancel, 'function');
@@ -108,7 +127,11 @@ test('Phase 3 ResponsePlanner: stale result returns null', () => {
   const { gate, orch, engine, planner } = buildPipeline();
   const genA = gate.issueToken();
   gate.issueToken();
-  const stale = orch.orchestrate('Change the budget to fifty thousand.', engine, { generation: genA });
+  const stale = orch.orchestrate(
+    'Change the budget to fifty thousand.',
+    engine,
+    { generation: genA },
+  );
   assert.equal(stale.isStale, true);
   const planned = planner.plan(stale, {
     activeCheckpointId: engine.active?.id ?? null,
@@ -133,7 +156,12 @@ test('Phase 3 ResponsePlanner: FORK mentions budget and comfort', () => {
   assert.notEqual(planned, null);
   if (planned) {
     const t = planned.text.toLowerCase();
-    assert.ok(t.includes('60000') || t.includes('sixty') || t.includes('60,000') || t.includes('rupees 60'));
+    assert.ok(
+      t.includes('60000') ||
+        t.includes('sixty') ||
+        t.includes('60,000') ||
+        t.includes('rupees 60'),
+    );
     assert.ok(t.includes('comfort'));
   }
 });
@@ -158,7 +186,9 @@ test('Phase 3 ResponsePlanner: MERGE mentions accommodation and budget unchanged
   assert.ok(planned);
   if (planned) {
     const t = planned.text.toLowerCase();
-    assert.ok(t.includes('stay') || t.includes('accommodation') || t.includes('hotel'));
+    assert.ok(
+      t.includes('stay') || t.includes('accommodation') || t.includes('hotel'),
+    );
     assert.ok(
       t.includes('budget remains') ||
         t.includes('40,000') ||
@@ -184,7 +214,9 @@ test('Phase 3 ResponsePlanner: UNDO mentions undone or restored', () => {
   assert.ok(planned);
   if (planned) {
     const t = planned.text.toLowerCase();
-    assert.ok(t.includes('undo') || t.includes('restored') || t.includes('undone'));
+    assert.ok(
+      t.includes('undo') || t.includes('restored') || t.includes('undone'),
+    );
   }
 });
 
@@ -210,8 +242,14 @@ test('Phase 3 ResponsePlanner: COMPARE mentions changed and unchanged', () => {
       t.includes('stay') ||
       t.includes('differ');
     const mentionsSame =
-      t.includes('same') || t.includes('unchanged') || t.includes('stays') || t.includes('destination');
-    assert.ok(mentionsChanged, 'expected changed-field mention in compare text');
+      t.includes('same') ||
+      t.includes('unchanged') ||
+      t.includes('stays') ||
+      t.includes('destination');
+    assert.ok(
+      mentionsChanged,
+      'expected changed-field mention in compare text',
+    );
     assert.ok(mentionsSame, 'expected unchanged/same mention in compare text');
   }
 });
@@ -222,7 +260,11 @@ test('Phase 3 ResponsePlanner: clarification and unsupported produce non-empty t
     {
       result: {
         kind: 'not-executed',
-        resolution: { kind: 'clarification', question: 'Which checkpoint?', candidates: [] },
+        resolution: {
+          kind: 'clarification',
+          question: 'Which checkpoint?',
+          candidates: [],
+        },
       },
       isStale: false,
       generation: 'gen-1' as GenerationToken,
@@ -265,6 +307,25 @@ test('Phase 3 interruption: newer submit supersedes older playback', async () =>
   }
 });
 
+test('Phase 3 rapid supersession cancels every older in-flight handle', async () => {
+  const { pipeline, provider, engine } = buildPipeline(40);
+  const first = pipeline.submit(
+    'Make another version assuming I can spend sixty thousand and prioritize comfort.',
+  );
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  const second = pipeline.submit('Change the budget to fifty thousand.');
+  await new Promise((resolve) => setTimeout(resolve, 2));
+  const third = pipeline.submit('Change the budget to seventy thousand.');
+  const results = await Promise.all([first, second, third]);
+
+  assert.equal(results[0]!.spoken, false);
+  assert.equal(results[1]!.spoken, false);
+  assert.equal(results[2]!.spoken, true);
+  assert.equal(provider.getSpokenLog().length, 1);
+  assert.match(provider.getSpokenLog()[0]!.text, /70,000|70000|seventy/i);
+  assert.equal(engine.active?.structuredState.budget, 70000);
+});
+
 test('Phase 3 stale suppression: older generation never reaches speak', async () => {
   const gate = new GenerationGate();
   const engine = createDemoGraph();
@@ -272,12 +333,22 @@ test('Phase 3 stale suppression: older generation never reaches speak', async ()
   const orch = new VoiceOrchestrator<TripState>(resolver, gate);
   const planner = new ResponsePlanner<TripState>();
   const provider = new MockVoiceOutputProvider();
-  const pipeline = new VoicePipeline<TripState>(orch, planner, provider, gate, engine);
+  const pipeline = new VoicePipeline<TripState>(
+    orch,
+    planner,
+    provider,
+    gate,
+    engine,
+  );
 
   const genA = gate.issueToken();
   gate.issueToken();
 
-  const oldOrch = orch.orchestrate('Change the budget to fifty thousand.', engine, { generation: genA });
+  const oldOrch = orch.orchestrate(
+    'Change the budget to fifty thousand.',
+    engine,
+    { generation: genA },
+  );
   assert.equal(oldOrch.isStale, true);
   const planned = planner.plan(oldOrch, {
     activeCheckpointId: engine.active?.id ?? null,
@@ -285,7 +356,9 @@ test('Phase 3 stale suppression: older generation never reaches speak', async ()
   });
   assert.equal(planned, null);
   const before = provider.getSpokenLog().length;
-  const result = await pipeline.submit('Make another version assuming I can spend sixty thousand and prioritize comfort.');
+  const result = await pipeline.submit(
+    'Make another version assuming I can spend sixty thousand and prioritize comfort.',
+  );
   assert.equal(result.orchestration.isStale, false);
   assert.equal(result.spoken, true);
   assert.ok(result.plannedText);
@@ -296,7 +369,9 @@ test('Phase 3 stale suppression: older generation never reaches speak', async ()
 test('Phase 3 generation/state consistency: checkpoint drift cancels speak', async () => {
   const { pipeline, provider, engine } = buildPipeline();
 
-  pipeline.submit('Make another version assuming I can spend sixty thousand and prioritize comfort.');
+  pipeline.submit(
+    'Make another version assuming I can spend sixty thousand and prioritize comfort.',
+  );
   const before = provider.getSpokenLog().length;
 
   engine.switchTo('cp-1');
@@ -312,7 +387,10 @@ test('Phase 3 Demo Reset: after operations, reset restores initial count, ids, a
   const { pipeline, engine, provider } = buildPipeline();
   const fresh = createDemoGraph();
   const initial = structuredClone(engine.export());
-  assert.ok(snapshotsEquivalent(initial, fresh.export()), 'precondition: engine starts matching fresh');
+  assert.ok(
+    snapshotsEquivalent(initial, fresh.export()),
+    'precondition: engine starts matching fresh',
+  );
   for (const step of DEMO_SEQUENCE.slice(1)) {
     await pipeline.submit(step.transcript);
   }
@@ -345,7 +423,9 @@ test('Phase 3 selective merge exact values: accommodation=Taj, budget=40000, tra
   const before = engine.get('cp-1');
   const transportBefore = before.structuredState.transportation;
   const budgetBefore = before.structuredState.budget;
-  await pipeline.submit("Take the hotel from the luxury version but don't change anything else.");
+  await pipeline.submit(
+    "Take the hotel from the luxury version but don't change anything else.",
+  );
   const active = engine.active!;
   assert.equal(active.structuredState.accommodation, 'Taj Fort Aguada');
   assert.equal(active.structuredState.budget, 40000);
@@ -360,9 +440,14 @@ test('Phase 3 exact undo: post-merge export matches pre-merge', async () => {
   );
   engine.switchTo('cp-1');
   const beforeMerge = structuredClone(engine.export());
-  await pipeline.submit("Take the hotel from the luxury version but don't change anything else.");
+  await pipeline.submit(
+    "Take the hotel from the luxury version but don't change anything else.",
+  );
   const afterMerge = engine.export();
-  assert.notDeepEqual(afterMerge.activeCheckpointId, beforeMerge.activeCheckpointId);
+  assert.notDeepEqual(
+    afterMerge.activeCheckpointId,
+    beforeMerge.activeCheckpointId,
+  );
   await pipeline.submit('Undo that.');
   const afterUndo = engine.export();
   assert.ok(snapshotsEquivalent(afterUndo, beforeMerge));
@@ -374,6 +459,7 @@ test('Phase 3 end-to-end 7-step deterministic demo flow through pipeline', async
 
   const step1 = await pipeline.submit(DEMO_SEQUENCE[0].transcript);
   assert.equal(step1.orchestration.isStale, false);
+  assert.equal(step1.orchestration.result.kind, 'executed');
   assert.equal(engine.active?.id, 'cp-1');
 
   const step2 = await pipeline.submit(DEMO_SEQUENCE[1].transcript);
@@ -401,11 +487,19 @@ test('Phase 3 end-to-end 7-step deterministic demo flow through pipeline', async
   const postMerge = engine.active!;
   assert.equal(postMerge.structuredState.accommodation, 'Taj Fort Aguada');
   assert.equal(postMerge.structuredState.budget, 40000);
-  assert.equal(
-    postMerge.structuredState.transportation, 'Konkan Express');
+  assert.equal(postMerge.structuredState.transportation, 'Konkan Express');
 
   const step6 = await pipeline.submit(DEMO_SEQUENCE[5].transcript);
   assert.equal(step6.orchestration.isStale, false);
+  assert.equal(step6.orchestration.result.kind, 'executed');
+  if (step6.orchestration.result.kind === 'executed') {
+    assert.deepEqual(
+      step6.orchestration.result.execution.diff?.changed.map(
+        (entry) => entry.path,
+      ),
+      ['accommodation'],
+    );
+  }
 
   const step7 = await pipeline.submit(DEMO_SEQUENCE[6].transcript);
   assert.equal(step7.orchestration.isStale, false);
@@ -421,4 +515,254 @@ test('Phase 3 no hardcoded secrets: literal key placeholders absent from provide
   const cfg = rime.getConfig();
   assert.equal(cfg.livekitUrl, null);
   assert.equal(cfg.hasCredentials, false);
+});
+
+test('Phase 3 Rime server configuration has explicit production defaults and env overrides', () => {
+  const defaults = getRimeServerConfig({});
+  assert.equal(defaults.endpoint, RIME_DEFAULTS.endpoint);
+  assert.equal(defaults.model, 'coda');
+  assert.equal(defaults.voice, 'celeste');
+  assert.equal(defaults.language, 'en');
+  assert.equal(defaults.audioFormat, 'mp3');
+  assert.equal(defaults.contentType, 'audio/mpeg');
+  assert.equal(defaults.apiKey, null);
+
+  const configured = getRimeServerConfig({
+    RIME_API_KEY: 'server-secret',
+    RIME_MODEL: 'arcana',
+    RIME_VOICE: 'astra',
+    RIME_LANGUAGE: 'hin',
+    RIME_AUDIO_FORMAT: 'wav',
+    RIME_ENDPOINT: 'https://rime.example/tts',
+  });
+  assert.equal(configured.apiKey, 'server-secret');
+  assert.equal(configured.model, 'arcana');
+  assert.equal(configured.voice, 'astra');
+  assert.equal(configured.language, 'hin');
+  assert.equal(configured.contentType, 'audio/wav');
+});
+
+test('Phase 3 Rime cancellation aborts the HTTP request and never records playback', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) =>
+    new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () =>
+        reject(new DOMException('aborted', 'AbortError')),
+      );
+    })) as typeof fetch;
+  try {
+    const provider = new RimeVoiceOutputProvider({ endpoint: '/api/rime-tts' });
+    const id = provider.reserveHandle();
+    const speaking = provider.speak('This must be interrupted.', {
+      generation: 'gen-1',
+      checkpointId: 'cp-1',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await provider.cancel(id);
+    const handle = await speaking;
+    assert.equal(handle.id, id);
+    assert.equal(provider.getStatus().playing, false);
+    assert.equal(provider.getStatus().lastSpoken, null);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Phase 3 LiveKit failure state is real and exposes the token error', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    Response.json(
+      { error: 'credentials absent' },
+      { status: 503 },
+    )) as typeof fetch;
+  try {
+    const provider = new LiveKitSttProvider({
+      tokenEndpoint: '/api/livekit-token',
+    });
+    await assert.rejects(provider.start(), /credentials absent/);
+    const status = provider.getStatus();
+    assert.equal(status.connected, false);
+    assert.equal(status.capturing, false);
+    assert.equal(status.connectionState, 'failed');
+    assert.match(status.error ?? '', /credentials absent/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('Phase 3 LiveKit interim transcription emits an early turn start for barge-in', () => {
+  const provider = new LiveKitSttProvider({ finalDebounceMs: 0 });
+  const events: string[] = [];
+  provider.subscribe((event) => events.push(event.type));
+  const feed = provider as unknown as {
+    handleTranscription(
+      segments: Array<{ id: string; text: string; final: boolean }>,
+    ): void;
+  };
+  feed.handleTranscription([
+    { id: 'segment-1', text: 'Make another', final: false },
+  ]);
+  feed.handleTranscription([
+    { id: 'segment-1', text: 'Make another version', final: false },
+  ]);
+  feed.handleTranscription([
+    { id: 'segment-1', text: 'Make another version', final: true },
+  ]);
+  assert.deepEqual(events, [
+    'turn_start',
+    'vad_start',
+    'interim_transcript',
+    'interim_transcript',
+    'final_transcript',
+    'vad_end',
+    'turn_end',
+  ]);
+});
+
+test('Phase 3 LiveKit combines consecutive final STT segments into one command', async () => {
+  const provider = new LiveKitSttProvider({ finalDebounceMs: 15 });
+  const finals: string[] = [];
+  const eventTypes: string[] = [];
+  provider.subscribe((event) => {
+    eventTypes.push(event.type);
+    if (event.type === 'final_transcript' && event.transcript)
+      finals.push(event.transcript);
+  });
+  const feed = provider as unknown as {
+    handleTranscription(
+      segments: Array<{ id: string; text: string; final: boolean }>,
+    ): void;
+  };
+
+  feed.handleTranscription([
+    { id: 'segment-1', text: 'Plan a five day trip to Goa', final: true },
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  feed.handleTranscription([
+    { id: 'segment-2', text: 'for forty thousand rupees.', final: true },
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  assert.deepEqual(finals, [
+    'Plan a five day trip to Goa for forty thousand rupees.',
+  ]);
+  assert.equal(
+    eventTypes.filter((type) => type === 'turn_start').length,
+    1,
+  );
+  assert.equal(
+    eventTypes.filter((type) => type === 'turn_end').length,
+    1,
+  );
+});
+
+test('Phase 3 LiveKit uses a fresh default room so reconnect dispatches an agent', () => {
+  const provider = new LiveKitSttProvider();
+  const first = provider.getConfig().roomName;
+  (
+    provider as unknown as { refreshGeneratedRoomName(): void }
+  ).refreshGeneratedRoomName();
+  const restarted = provider.getConfig().roomName;
+  const second = new LiveKitSttProvider().getConfig().roomName;
+  assert.match(first, /^voice-checkpoint-/);
+  assert.match(restarted, /^voice-checkpoint-/);
+  assert.match(second, /^voice-checkpoint-/);
+  assert.notEqual(first, restarted);
+  assert.notEqual(first, second);
+  assert.equal(
+    new LiveKitSttProvider({ roomName: 'explicit-room' }).getConfig().roomName,
+    'explicit-room',
+  );
+});
+
+test('Phase 3 Rime proxy keeps authorization server-side and streams audio', async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.RIME_API_KEY;
+  process.env.RIME_API_KEY = 'private-rime-key';
+  let observedAuthorization = '';
+  let observedBody: Record<string, unknown> = {};
+  globalThis.fetch = (async (
+    _input: string | URL | Request,
+    init?: RequestInit,
+  ) => {
+    observedAuthorization =
+      new Headers(init?.headers).get('authorization') ?? '';
+    const requestBody = init?.body;
+    if (typeof requestBody !== 'string')
+      throw new Error('Expected JSON request body');
+    observedBody = JSON.parse(requestBody) as Record<string, unknown>;
+    return new Response('audio-bytes', {
+      status: 200,
+      headers: { 'Content-Type': 'audio/mpeg' },
+    });
+  }) as typeof fetch;
+  try {
+    const response = await synthesizeRime(
+      new Request('http://localhost/api/rime-tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: 'Hello from the checkpoint.',
+          generation: 'gen-8',
+          checkpointId: 'cp-2',
+        }),
+      }),
+    );
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('x-voice-provider'), 'Rime');
+    assert.equal(observedAuthorization, 'Bearer private-rime-key');
+    assert.equal(observedBody.modelId, 'coda');
+    assert.equal(observedBody.speaker, 'celeste');
+    assert.equal(await response.text(), 'audio-bytes');
+    assert.equal(
+      JSON.stringify([...response.headers.entries()]).includes(
+        'private-rime-key',
+      ),
+      false,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) delete process.env.RIME_API_KEY;
+    else process.env.RIME_API_KEY = originalKey;
+  }
+});
+
+test('Phase 3 LiveKit token endpoint returns URL plus short-lived browser token without secrets', async () => {
+  const original = {
+    url: process.env.LIVEKIT_URL,
+    key: process.env.LIVEKIT_API_KEY,
+    secret: process.env.LIVEKIT_API_SECRET,
+    agent: process.env.LIVEKIT_AGENT_NAME,
+  };
+  process.env.LIVEKIT_URL = 'wss://example.livekit.cloud';
+  process.env.LIVEKIT_API_KEY = 'APItest';
+  process.env.LIVEKIT_API_SECRET = 'a-secure-test-secret-with-enough-entropy';
+  process.env.LIVEKIT_AGENT_NAME = 'voice-checkpoint-transcriber';
+  try {
+    const response = await createLiveKitToken(
+      new Request(
+        'http://localhost/api/livekit-token?room=room-1&participant=judge-1',
+      ),
+    );
+    assert.equal(response.status, 200);
+    const payload = (await response.json()) as Record<string, unknown>;
+    assert.equal(payload.url, 'wss://example.livekit.cloud');
+    assert.equal(payload.room, 'room-1');
+    assert.equal(typeof payload.token, 'string');
+    assert.equal(
+      JSON.stringify(payload).includes('a-secure-test-secret'),
+      false,
+    );
+    assert.equal(response.headers.get('cache-control'), 'no-store');
+  } finally {
+    for (const [key, value] of Object.entries({
+      LIVEKIT_URL: original.url,
+      LIVEKIT_API_KEY: original.key,
+      LIVEKIT_API_SECRET: original.secret,
+      LIVEKIT_AGENT_NAME: original.agent,
+    })) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 });

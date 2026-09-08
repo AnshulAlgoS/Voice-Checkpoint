@@ -26,7 +26,10 @@ export class VoicePipeline<T extends SemanticState = SemanticState> {
   private readonly graph: StateGraph<T>;
   private activeHandleId: string | null = null;
   private activeHandleGeneration: string | null = null;
-  private pendingCancelMap: Map<string, { cancelled: boolean }> = new Map();
+  private pendingCancelMap: Map<
+    string,
+    { cancelled: boolean; generation: string }
+  > = new Map();
 
   constructor(
     orch: VoiceOrchestrator<T>,
@@ -51,19 +54,37 @@ export class VoicePipeline<T extends SemanticState = SemanticState> {
   }
 
   private async cancelPriorIfStale(): Promise<string | null> {
-    const handle = this.activeHandleId;
-    if (!handle) return null;
-    const gen = this.activeHandleGeneration;
-    if (gen && gen !== this.gate.currentGeneration) {
-      const pending = this.pendingCancelMap.get(handle);
-      if (pending) pending.cancelled = true;
-      await this.provider.cancel(handle);
-      this.activeHandleId = null;
-      this.activeHandleGeneration = null;
+    let firstCancelled: string | null = null;
+    for (const [handle, pending] of this.pendingCancelMap) {
+      if (pending.generation === this.gate.currentGeneration) continue;
+      pending.cancelled = true;
+      try {
+        await this.provider.cancel(handle);
+      } catch {
+        /* cancellation is best effort */
+      }
       this.pendingCancelMap.delete(handle);
-      return handle;
+      if (!firstCancelled) firstCancelled = handle;
+      if (this.activeHandleId === handle) {
+        this.activeHandleId = null;
+        this.activeHandleGeneration = null;
+      }
     }
-    return null;
+    return firstCancelled;
+  }
+
+  private async cancelAllHandles(): Promise<void> {
+    for (const [handle, pending] of this.pendingCancelMap) {
+      pending.cancelled = true;
+      try {
+        await this.provider.cancel(handle);
+      } catch {
+        /* cancellation is best effort */
+      }
+      this.pendingCancelMap.delete(handle);
+    }
+    this.activeHandleId = null;
+    this.activeHandleGeneration = null;
   }
 
   async submit(transcript: string): Promise<PipelineStepResult<T>> {
@@ -73,7 +94,9 @@ export class VoicePipeline<T extends SemanticState = SemanticState> {
     const _checkpoints = this.graph.list();
     const activeCheckpointIdBefore = this.graph.active?.id ?? null;
 
-    const orchestration = this.orch.orchestrate(transcript, this.graph, { generation });
+    const orchestration = this.orch.orchestrate(transcript, this.graph, {
+      generation,
+    });
 
     if (orchestration.isStale) {
       return {
@@ -111,7 +134,11 @@ export class VoicePipeline<T extends SemanticState = SemanticState> {
     }
 
     const activeCpIdNow = this.graph.active?.id ?? null;
-    if (planned.checkpointId && activeCpIdNow && planned.checkpointId !== activeCpIdNow) {
+    if (
+      planned.checkpointId &&
+      activeCpIdNow &&
+      planned.checkpointId !== activeCpIdNow
+    ) {
       return {
         orchestration,
         spoken: false,
@@ -126,11 +153,16 @@ export class VoicePipeline<T extends SemanticState = SemanticState> {
       checkpointId: planned.checkpointId,
     };
 
-    const cancellationToken = { cancelled: false };
+    const cancellationToken = { cancelled: false, generation };
     let reservedHandleId: string | null = null;
     try {
-      if (typeof (this.provider as unknown as { reserveHandle?: () => string }).reserveHandle === 'function') {
-        reservedHandleId = (this.provider as unknown as { reserveHandle: () => string }).reserveHandle();
+      if (
+        typeof (this.provider as unknown as { reserveHandle?: () => string })
+          .reserveHandle === 'function'
+      ) {
+        reservedHandleId = (
+          this.provider as unknown as { reserveHandle: () => string }
+        ).reserveHandle();
       }
     } catch {
       reservedHandleId = null;
@@ -147,7 +179,11 @@ export class VoicePipeline<T extends SemanticState = SemanticState> {
     if (!this.gate.authorize(generation)) {
       if (reservedHandleId) {
         cancellationToken.cancelled = true;
-        try { await this.provider.cancel(reservedHandleId); } catch { /* noop */ }
+        try {
+          await this.provider.cancel(reservedHandleId);
+        } catch {
+          /* noop */
+        }
         this.activeHandleId = null;
         this.activeHandleGeneration = null;
         this.pendingCancelMap.delete(reservedHandleId);
@@ -161,7 +197,10 @@ export class VoicePipeline<T extends SemanticState = SemanticState> {
       };
     }
 
-    const handlePromise: Promise<VoiceOutputHandle> = this.provider.speak(planned.text, ctx);
+    const handlePromise: Promise<VoiceOutputHandle> = this.provider.speak(
+      planned.text,
+      ctx,
+    );
 
     if (!reservedHandleId) {
       void cancellationToken;
@@ -174,12 +213,31 @@ export class VoicePipeline<T extends SemanticState = SemanticState> {
       actualHandle = null;
     }
 
+    if (!actualHandle) {
+      if (reservedHandleId) this.pendingCancelMap.delete(reservedHandleId);
+      if (this.activeHandleId === reservedHandleId) {
+        this.activeHandleId = null;
+        this.activeHandleGeneration = null;
+      }
+      return {
+        orchestration,
+        spoken: false,
+        handleId: null,
+        plannedText: planned.text,
+        cancelledPriorHandle: cancelledHandle,
+      };
+    }
+
     const finalHandleId = actualHandle?.id ?? reservedHandleId;
 
     if (finalHandleId && this.pendingCancelMap.has(finalHandleId)) {
       const cancelState = this.pendingCancelMap.get(finalHandleId)!;
       if (cancelState.cancelled) {
-        try { if (actualHandle) await this.provider.cancel(actualHandle.id); } catch { /* noop */ }
+        try {
+          if (actualHandle) await this.provider.cancel(actualHandle.id);
+        } catch {
+          /* noop */
+        }
         this.pendingCancelMap.delete(finalHandleId);
         if (this.activeHandleId === finalHandleId) {
           this.activeHandleId = null;
@@ -203,7 +261,11 @@ export class VoicePipeline<T extends SemanticState = SemanticState> {
 
     if (!this.gate.authorize(generation)) {
       if (finalHandleId) {
-        try { await this.provider.cancel(finalHandleId); } catch { /* noop */ }
+        try {
+          await this.provider.cancel(finalHandleId);
+        } catch {
+          /* noop */
+        }
         this.activeHandleId = null;
         this.activeHandleGeneration = null;
       }
@@ -214,6 +276,12 @@ export class VoicePipeline<T extends SemanticState = SemanticState> {
         plannedText: planned.text,
         cancelledPriorHandle: cancelledHandle,
       };
+    }
+
+    this.pendingCancelMap.delete(finalHandleId);
+    if (this.activeHandleId === finalHandleId) {
+      this.activeHandleId = null;
+      this.activeHandleGeneration = null;
     }
 
     return {
@@ -227,28 +295,12 @@ export class VoicePipeline<T extends SemanticState = SemanticState> {
 
   async interrupt(): Promise<void> {
     this.gate.issueToken();
-    const handle = this.activeHandleId;
-    if (handle) {
-      const pending = this.pendingCancelMap.get(handle);
-      if (pending) pending.cancelled = true;
-      try { await this.provider.cancel(handle); } catch { /* noop */ }
-      this.activeHandleId = null;
-      this.activeHandleGeneration = null;
-      this.pendingCancelMap.delete(handle);
-    }
+    await this.cancelAllHandles();
   }
 
   async reset(resetGraph: () => void): Promise<void> {
     this.gate.issueToken();
-    const handle = this.activeHandleId;
-    if (handle) {
-      const pending = this.pendingCancelMap.get(handle);
-      if (pending) pending.cancelled = true;
-      try { await this.provider.cancel(handle); } catch { /* noop */ }
-      this.activeHandleId = null;
-      this.activeHandleGeneration = null;
-      this.pendingCancelMap.delete(handle);
-    }
+    await this.cancelAllHandles();
     resetGraph();
   }
 

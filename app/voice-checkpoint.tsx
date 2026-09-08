@@ -40,7 +40,10 @@ import {
   createVoiceOutputProvider,
   type VoiceOutputStatus,
 } from '@/lib/voice/VoiceOutputProvider';
-import { VoicePipeline, type PipelineStepResult } from '@/lib/voice/VoicePipeline';
+import {
+  VoicePipeline,
+  type PipelineStepResult,
+} from '@/lib/voice/VoicePipeline';
 import {
   createDemoGraph,
   DEMO_SEQUENCE,
@@ -127,22 +130,26 @@ const EMPTY_LAST_OP: LastOpInfo = {
   resolution: null,
 };
 
-function opInfoFromResult(
-  result: OrchestratorResult<TripState>,
-): LastOpInfo {
+function opInfoFromResult(result: OrchestratorResult<TripState>): LastOpInfo {
   if (result.result.kind === 'executed') {
     const r = result.result.resolution;
     if (r.kind === 'resolved') {
       const op = r.operation;
       const src =
-        'sourceCheckpointId' in op && op.sourceCheckpointId ? op.sourceCheckpointId :
-        'fromCheckpointId' in op ? op.fromCheckpointId : null;
+        'sourceCheckpointId' in op && op.sourceCheckpointId
+          ? op.sourceCheckpointId
+          : 'fromCheckpointId' in op
+            ? op.fromCheckpointId
+            : null;
       const tgt =
-        'checkpointId' in op ? op.checkpointId :
-        'targetCheckpointId' in op && op.targetCheckpointId ? op.targetCheckpointId :
-        'toCheckpointId' in op ? op.toCheckpointId :
-        result.result.execution.checkpoint?.id ?? null;
-      const fields = 'fields' in op ? op.fields ?? null : null;
+        'checkpointId' in op
+          ? op.checkpointId
+          : 'targetCheckpointId' in op && op.targetCheckpointId
+            ? op.targetCheckpointId
+            : 'toCheckpointId' in op
+              ? op.toCheckpointId
+              : (result.result.execution.checkpoint?.id ?? null);
+      const fields = 'fields' in op ? (op.fields ?? null) : null;
       return {
         operation: op.type,
         confidenceLabel: 'resolved',
@@ -163,37 +170,58 @@ export function VoiceCheckpoint() {
   const [engine] = useState(createDemoGraph);
   const resolver = useMemo(() => new VoiceIntentResolver<TripState>(), []);
   const [gate] = useState(() => new GenerationGate());
-  const orch = useMemo(() => new VoiceOrchestrator<TripState>(resolver, gate), [resolver, gate]);
+  const orch = useMemo(
+    () => new VoiceOrchestrator<TripState>(resolver, gate),
+    [resolver, gate],
+  );
   const planner = useMemo(() => new ResponsePlanner<TripState>(), []);
-  const [provider] = useState(() => createVoiceOutputProvider({ mockDelayMs: 30 }));
+  const [provider] = useState(() =>
+    createVoiceOutputProvider({ mockDelayMs: 30 }),
+  );
   const pipeline = useMemo(
     () => new VoicePipeline<TripState>(orch, planner, provider, gate, engine),
     [orch, planner, provider, gate, engine],
   );
-  const [inputProvider] = useState<VoiceInputProvider>(() => createVoiceInputProvider());
+  const [inputProvider] = useState<VoiceInputProvider>(() =>
+    createVoiceInputProvider(),
+  );
 
-  const [snapshot, setSnapshot] = useState<GraphSnapshot<TripState>>(engine.export());
+  const [snapshot, setSnapshot] = useState<GraphSnapshot<TripState>>(
+    engine.export(),
+  );
   const [diff, setDiff] = useState<StateDiff | null>(null);
   const [transcript, setTranscript] = useState('');
   const [transcriptLog, setTranscriptLog] = useState<TranscriptItem[]>([]);
-  const [notice, setNotice] = useState<{ kind: 'ok' | 'err' | 'info' | 'warn'; text: string }>({
+  const [notice, setNotice] = useState<{
+    kind: 'ok' | 'err' | 'info' | 'warn';
+    text: string;
+  }>({
     kind: 'info',
     text: 'Version A is active and isolated. Type a command, enable microphone, or click Demo Reset.',
   });
   const [lastOp, setLastOp] = useState<LastOpInfo>(EMPTY_LAST_OP);
-  const [lastResult, setLastResult] = useState<PipelineStepResult<TripState> | null>(null);
+  const [lastResult, setLastResult] =
+    useState<PipelineStepResult<TripState> | null>(null);
   const [lastTaskGeneration, setLastTaskGeneration] = useState<string>('');
   const [wasStale, setWasStale] = useState(false);
-  const [voiceStatus, setVoiceStatus] = useState<VoiceOutputStatus>(() => provider.getStatus());
-  const [voiceInputStatus, setVoiceInputStatus] = useState<InputStatus>(() => inputProvider.getStatus());
+  const [voiceStatus, setVoiceStatus] = useState<VoiceOutputStatus>(() =>
+    provider.getStatus(),
+  );
+  const [voiceInputStatus, setVoiceInputStatus] = useState<InputStatus>(() =>
+    inputProvider.getStatus(),
+  );
   const [interimTranscript, setInterimTranscript] = useState<string>('');
   const [tick, setTick] = useState(0);
   const [demoStepIndex, setDemoStepIndex] = useState(0);
   const [micBusy, setMicBusy] = useState(false);
 
-  const active = snapshot.checkpoints.find((c) => c.id === snapshot.activeCheckpointId) ?? null;
+  const active =
+    snapshot.checkpoints.find((c) => c.id === snapshot.activeCheckpointId) ??
+    null;
 
-  const runCommandRef = useRef<(text?: string) => Promise<void>>(async () => {});
+  const runCommandRef = useRef<(text?: string) => Promise<void>>(
+    async () => {},
+  );
 
   useEffect(() => {
     let settled = false;
@@ -214,6 +242,16 @@ export function VoiceCheckpoint() {
             setNotice({
               kind: 'info',
               text: 'Voice input disconnected.',
+            });
+          } else if (
+            ev.connection === 'connecting' ||
+            ev.connection === 'reconnecting'
+          ) {
+            setNotice({ kind: 'info', text: `LiveKit ${ev.connection}…` });
+          } else if (ev.connection === 'failed') {
+            setNotice({
+              kind: 'err',
+              text: ev.message ?? 'LiveKit connection failed.',
             });
           }
           break;
@@ -288,7 +326,6 @@ export function VoiceCheckpoint() {
             kind: 'err',
             text: `Could not start voice input: ${msg}`,
           });
-          throw err;
         }
       }
     } finally {
@@ -302,18 +339,22 @@ export function VoiceCheckpoint() {
 
   const applyResult = useCallback(
     (result: PipelineStepResult<TripState>) => {
-      setLastResult(result);
-      setLastTaskGeneration(result.orchestration.generation);
-      setWasStale(result.orchestration.isStale);
-      setLastOp(opInfoFromResult(result.orchestration));
-
-      if (result.orchestration.isStale) {
+      const isStale =
+        result.orchestration.isStale ||
+        !gate.authorize(result.orchestration.generation);
+      if (isStale) {
+        setWasStale(true);
         setNotice({
           kind: 'warn',
-          text: `Stale response (${result.orchestration.generation}) discarded. Current is ${currentGeneration}.`,
+          text: `Stale response (${result.orchestration.generation}) discarded. Current is ${gate.currentGeneration}.`,
         });
         return;
       }
+
+      setLastResult(result);
+      setLastTaskGeneration(result.orchestration.generation);
+      setWasStale(false);
+      setLastOp(opInfoFromResult(result.orchestration));
 
       const inner = result.orchestration.result;
       if (inner.kind === 'executed') {
@@ -370,7 +411,7 @@ export function VoiceCheckpoint() {
       }
       setVoiceStatus(provider.getStatus());
     },
-    [currentGeneration, provider],
+    [gate, provider],
   );
 
   const runCommand = useCallback(
@@ -392,8 +433,15 @@ export function VoiceCheckpoint() {
       if (text === undefined) setTranscript('');
       const result = await pipeline.submit(useText);
       applyResult(result);
+      const outputStatus = provider.getStatus();
+      if (!result.spoken && outputStatus.error) {
+        setNotice({
+          kind: 'err',
+          text: `Rime audio failed: ${outputStatus.error}`,
+        });
+      }
     },
-    [transcript, pipeline, applyResult],
+    [transcript, pipeline, applyResult, provider],
   );
 
   useEffect(() => {
@@ -429,7 +477,10 @@ export function VoiceCheckpoint() {
 
   async function runNextDemoStep() {
     if (demoStepIndex >= DEMO_SEQUENCE.length) {
-      setNotice({ kind: 'info', text: 'Demo sequence complete. Click Demo Reset to restart.' });
+      setNotice({
+        kind: 'info',
+        text: 'Demo sequence complete. Click Demo Reset to restart.',
+      });
       return;
     }
     const step = DEMO_SEQUENCE[demoStepIndex];
@@ -466,8 +517,8 @@ export function VoiceCheckpoint() {
               Think out loud. Change your mind. Keep every version.
             </h1>
             <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-              Voice-first branching decisions. Every spoken operation creates a typed checkpoint.
-              Interrupt mid-response; stale audio never plays.
+              Voice-first branching decisions. Every spoken operation creates a
+              typed checkpoint. Interrupt mid-response; stale audio never plays.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -505,15 +556,22 @@ export function VoiceCheckpoint() {
                       <h2 className="text-xl font-semibold tracking-tight">
                         V{active.versionNumber} · {active.label}
                       </h2>
-                      <p className="mt-1 text-sm text-muted-foreground">{active.summary}</p>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {active.summary}
+                      </p>
                     </>
                   ) : (
-                    <h2 className="text-xl font-semibold">No active checkpoint</h2>
+                    <h2 className="text-xl font-semibold">
+                      No active checkpoint
+                    </h2>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
                   {active && (
-                    <Badge variant="outline" className="gap-1.5 border-primary/40 bg-primary/10 text-primary">
+                    <Badge
+                      variant="outline"
+                      className="gap-1.5 border-primary/40 bg-primary/10 text-primary"
+                    >
                       {active.branchId}
                     </Badge>
                   )}
@@ -553,7 +611,9 @@ export function VoiceCheckpoint() {
                       onClick={() => runNextDemoStep()}
                       className="h-8 text-xs"
                     >
-                      ▶ Next step ({Math.min(demoStepIndex + 1, DEMO_SEQUENCE.length)}/{DEMO_SEQUENCE.length})
+                      ▶ Next step (
+                      {Math.min(demoStepIndex + 1, DEMO_SEQUENCE.length)}/
+                      {DEMO_SEQUENCE.length})
                     </Button>
                     <Button
                       size="sm"
@@ -609,11 +669,17 @@ export function VoiceCheckpoint() {
                   </div>
                   <div className="flex flex-row gap-1.5">
                     <Button
-                      variant={voiceInputStatus.connected ? 'destructive' : 'outline'}
+                      variant={
+                        voiceInputStatus.connected ? 'destructive' : 'outline'
+                      }
                       onClick={() => void toggleMic()}
                       disabled={micBusy}
                       className="h-11 shrink-0 px-3"
-                      aria-label={voiceInputStatus.connected ? 'Stop microphone' : 'Enable microphone'}
+                      aria-label={
+                        voiceInputStatus.connected
+                          ? 'Stop microphone'
+                          : 'Enable microphone'
+                      }
                     >
                       {voiceInputStatus.connected ? (
                         <MicOff className="size-4" />
@@ -621,7 +687,10 @@ export function VoiceCheckpoint() {
                         <Mic className="size-4" />
                       )}
                     </Button>
-                    <Button onClick={() => void runCommand()} className="h-11 px-5 shrink-0">
+                    <Button
+                      onClick={() => void runCommand()}
+                      className="h-11 px-5 shrink-0"
+                    >
                       Resolve &amp; Speak
                     </Button>
                   </div>
@@ -649,55 +718,77 @@ export function VoiceCheckpoint() {
                   </Badge>
                 </div>
                 <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-                  {[...diff.changed, ...diff.added, ...diff.removed].map((change) => {
-                    const kindBadge =
-                      change.kind === 'added' ? ('Added' as const) :
-                      change.kind === 'removed' ? ('Removed' as const) : ('Changed' as const);
-                    const tone =
-                      change.kind === 'added'
-                        ? 'border-emerald-300/20 bg-emerald-300/5'
-                        : change.kind === 'removed'
-                          ? 'border-rose-300/20 bg-rose-300/5'
-                          : 'border-amber-300/20 bg-amber-300/5';
-                    const toneLabel =
-                      change.kind === 'added'
-                        ? 'text-emerald-300'
-                        : change.kind === 'removed'
-                          ? 'text-rose-300'
-                          : 'text-amber-300';
-                    return (
-                      <div key={`${change.kind}-${change.path}`} className={`rounded-xl border p-3.5 ${tone}`}>
-                        <div className="mb-2 flex items-center justify-between gap-2">
-                          <p className={`text-[0.68rem] font-bold uppercase tracking-wider ${toneLabel}`}>
-                            {FIELD_META.find((m) => m.key === change.path)?.label ?? change.path}
-                          </p>
-                          <Badge variant="outline" className="text-[10px] border-current opacity-70">
-                            {kindBadge}
-                          </Badge>
-                        </div>
-                        <div className="space-y-1 text-xs">
-                          {'before' in change && change.before !== undefined && (
-                            <p className="text-muted-foreground">
-                              <span className="line-through opacity-70">
-                                {formatFieldValue(change.path, change.before)}
-                              </span>
+                  {[...diff.changed, ...diff.added, ...diff.removed].map(
+                    (change) => {
+                      const kindBadge =
+                        change.kind === 'added'
+                          ? ('Added' as const)
+                          : change.kind === 'removed'
+                            ? ('Removed' as const)
+                            : ('Changed' as const);
+                      const tone =
+                        change.kind === 'added'
+                          ? 'border-emerald-300/20 bg-emerald-300/5'
+                          : change.kind === 'removed'
+                            ? 'border-rose-300/20 bg-rose-300/5'
+                            : 'border-amber-300/20 bg-amber-300/5';
+                      const toneLabel =
+                        change.kind === 'added'
+                          ? 'text-emerald-300'
+                          : change.kind === 'removed'
+                            ? 'text-rose-300'
+                            : 'text-amber-300';
+                      return (
+                        <div
+                          key={`${change.kind}-${change.path}`}
+                          className={`rounded-xl border p-3.5 ${tone}`}
+                        >
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <p
+                              className={`text-[0.68rem] font-bold uppercase tracking-wider ${toneLabel}`}
+                            >
+                              {FIELD_META.find((m) => m.key === change.path)
+                                ?.label ?? change.path}
                             </p>
-                          )}
-                          {'after' in change && change.after !== undefined && (
-                            <p className="font-semibold leading-snug">
-                              {change.kind === 'removed' ? (
-                                <span className="line-through text-rose-300/80">
-                                  {formatFieldValue(change.path, change.after)}
-                                </span>
-                              ) : (
-                                formatFieldValue(change.path, change.after)
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] border-current opacity-70"
+                            >
+                              {kindBadge}
+                            </Badge>
+                          </div>
+                          <div className="space-y-1 text-xs">
+                            {'before' in change &&
+                              change.before !== undefined && (
+                                <p className="text-muted-foreground">
+                                  <span className="line-through opacity-70">
+                                    {formatFieldValue(
+                                      change.path,
+                                      change.before,
+                                    )}
+                                  </span>
+                                </p>
                               )}
-                            </p>
-                          )}
+                            {'after' in change &&
+                              change.after !== undefined && (
+                                <p className="font-semibold leading-snug">
+                                  {change.kind === 'removed' ? (
+                                    <span className="line-through text-rose-300/80">
+                                      {formatFieldValue(
+                                        change.path,
+                                        change.after,
+                                      )}
+                                    </span>
+                                  ) : (
+                                    formatFieldValue(change.path, change.after)
+                                  )}
+                                </p>
+                              )}
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    },
+                  )}
                   {diff.unchanged.length > 0 && (
                     <div className="rounded-xl border border-border bg-muted/30 p-3.5 sm:col-span-2 lg:col-span-3">
                       <p className="mb-1 text-[0.68rem] font-bold uppercase tracking-wider text-muted-foreground">
@@ -706,9 +797,14 @@ export function VoiceCheckpoint() {
                       <p className="text-xs text-muted-foreground">
                         {diff.unchanged
                           .slice(0, 6)
-                          .map((c) => FIELD_META.find((m) => m.key === c.path)?.label ?? c.path)
+                          .map(
+                            (c) =>
+                              FIELD_META.find((m) => m.key === c.path)?.label ??
+                              c.path,
+                          )
                           .join(' · ')}
-                        {diff.unchanged.length > 6 && ` · +${diff.unchanged.length - 6} more`}
+                        {diff.unchanged.length > 6 &&
+                          ` · +${diff.unchanged.length - 6} more`}
                       </p>
                     </div>
                   )}
@@ -720,7 +816,9 @@ export function VoiceCheckpoint() {
               <Card className="rounded-[1.3rem] border border-border bg-card p-5 md:p-6">
                 <div className="mb-3 flex items-center gap-2">
                   <ArrowDownToLine className="size-5 text-primary" />
-                  <h2 className="text-base font-semibold">Selected merge fields</h2>
+                  <h2 className="text-base font-semibold">
+                    Selected merge fields
+                  </h2>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {lastOp.fields.map((f) => (
@@ -744,7 +842,8 @@ export function VoiceCheckpoint() {
               </div>
               {transcriptLog.length === 0 ? (
                 <p className="text-xs text-muted-foreground">
-                  No transcripts yet. Type a command above or click &quot;Next step&quot; to run the demo.
+                  No transcripts yet. Type a command above or click &quot;Next
+                  step&quot; to run the demo.
                 </p>
               ) : (
                 <ScrollArea className="h-60 rounded-lg border border-border bg-muted/20 p-3">
@@ -768,7 +867,10 @@ export function VoiceCheckpoint() {
                               <>
                                 <Volume2 className="size-3" /> Assistant
                                 {item.stale && (
-                                  <Badge variant="outline" className="text-[9px] border-amber-300/60 text-amber-300">
+                                  <Badge
+                                    variant="outline"
+                                    className="text-[9px] border-amber-300/60 text-amber-300"
+                                  >
                                     STALE DROPPED
                                   </Badge>
                                 )}
@@ -778,7 +880,9 @@ export function VoiceCheckpoint() {
                           <span className="text-[0.65rem] text-muted-foreground">
                             {item.time}
                             {item.generation && (
-                              <span className="ml-2 opacity-70">· gen {item.generation}</span>
+                              <span className="ml-2 opacity-70">
+                                · gen {item.generation}
+                              </span>
                             )}
                           </span>
                         </div>
@@ -798,9 +902,13 @@ export function VoiceCheckpoint() {
                   <p className="text-xs font-bold uppercase tracking-[0.16em] text-muted-foreground">
                     Checkpoint graph
                   </p>
-                  <h2 className="mt-1 text-base font-semibold">Decision lineage</h2>
+                  <h2 className="mt-1 text-base font-semibold">
+                    Decision lineage
+                  </h2>
                 </div>
-                <span className="text-xs text-muted-foreground">{checkpointList.length} cps</span>
+                <span className="text-xs text-muted-foreground">
+                  {checkpointList.length} cps
+                </span>
               </div>
               <div className="relative space-y-2 before:absolute before:bottom-3 before:left-[17px] before:top-3 before:w-px before:bg-border">
                 {checkpointList.map((cp) => (
@@ -825,13 +933,20 @@ export function VoiceCheckpoint() {
                       V{cp.versionNumber}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold">{cp.label}</span>
+                      <span className="block truncate text-sm font-semibold">
+                        {cp.label}
+                      </span>
                       <span className="block truncate text-xs text-muted-foreground">
-                        {cp.parentId ? `parent ${cp.parentId} · ${cp.branchId}` : 'root'}
+                        {cp.parentId
+                          ? `parent ${cp.parentId} · ${cp.branchId}`
+                          : 'root'}
                       </span>
                     </span>
                     {cp.id === active?.id && (
-                      <Badge variant="outline" className="text-[10px] border-primary/50 text-primary">
+                      <Badge
+                        variant="outline"
+                        className="text-[10px] border-primary/50 text-primary"
+                      >
                         ACTIVE
                       </Badge>
                     )}
@@ -843,82 +958,125 @@ export function VoiceCheckpoint() {
             <Card className="rounded-[1.3rem] border border-border bg-card p-5 md:p-6">
               <div className="mb-3 flex items-center gap-2">
                 <Info className="size-5 text-primary" />
-                <h2 className="text-base font-semibold">Operation &amp; generation status</h2>
+                <h2 className="text-base font-semibold">
+                  Operation &amp; generation status
+                </h2>
               </div>
               <div className="grid grid-cols-2 gap-2.5 text-xs">
+                {!voiceInputStatus.connected && (
+                  <div className="col-span-2 rounded-xl border border-cyan-400/25 bg-cyan-400/5 p-3 text-cyan-100">
+                    Run <code className="font-semibold">npm run dev:voice</code>,
+                    then click the microphone and allow browser access.
+                  </div>
+                )}
                 <div className="rounded-xl border border-border bg-muted/30 p-3">
                   <p className="mb-1 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-muted-foreground">
                     Last operation
                   </p>
-                  <p className="text-sm font-semibold">{lastOp.operation ?? '—'}</p>
+                  <p className="text-sm font-semibold">
+                    {lastOp.operation ?? '—'}
+                  </p>
                 </div>
                 <div className="rounded-xl border border-border bg-muted/30 p-3">
                   <p className="mb-1 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-muted-foreground">
                     Status
                   </p>
-                  <p className={`text-sm font-semibold ${wasStale ? 'text-amber-300' : 'text-emerald-300'}`}>
-                    {wasStale ? 'STALE DROPPED' : lastOp.operation ? 'APPLIED' : 'idle'}
+                  <p
+                    className={`text-sm font-semibold ${wasStale ? 'text-amber-300' : 'text-emerald-300'}`}
+                  >
+                    {wasStale
+                      ? 'STALE DROPPED'
+                      : lastOp.operation
+                        ? 'APPLIED'
+                        : 'idle'}
                   </p>
                 </div>
                 <div className="rounded-xl border border-border bg-muted/30 p-3">
                   <p className="mb-1 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-muted-foreground">
                     Current generation
                   </p>
-                  <code className="text-xs font-semibold">{currentGeneration}</code>
+                  <code className="text-xs font-semibold">
+                    {currentGeneration}
+                  </code>
                 </div>
                 <div className="rounded-xl border border-border bg-muted/30 p-3">
                   <p className="mb-1 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-muted-foreground">
                     Last task gen
                   </p>
-                  <code className="text-xs font-semibold">{lastTaskGeneration || '—'}</code>
+                  <code className="text-xs font-semibold">
+                    {lastTaskGeneration || '—'}
+                  </code>
                 </div>
                 <div className="rounded-xl border border-border bg-muted/30 p-3">
                   <p className="mb-1 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-muted-foreground">
                     Source cp
                   </p>
-                  <code className="text-xs font-semibold">{lastOp.sourceCheckpointId ?? '—'}</code>
+                  <code className="text-xs font-semibold">
+                    {lastOp.sourceCheckpointId ?? '—'}
+                  </code>
                 </div>
                 <div className="rounded-xl border border-border bg-muted/30 p-3">
                   <p className="mb-1 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-muted-foreground">
                     Target cp
                   </p>
-                  <code className="text-xs font-semibold">{lastOp.targetCheckpointId ?? '—'}</code>
+                  <code className="text-xs font-semibold">
+                    {lastOp.targetCheckpointId ?? '—'}
+                  </code>
                 </div>
               </div>
-              {lastOp.resolution && lastOp.resolution.kind === 'clarification' && (
-                <div className="mt-3 rounded-xl border border-amber-300/25 bg-amber-300/5 p-3">
-                  <p className="mb-1.5 text-xs font-semibold text-amber-200">
-                    Clarification: {lastOp.resolution.question}
-                  </p>
-                  <ul className="space-y-0.5 text-[11px]">
-                    {lastOp.resolution.candidates.slice(0, 5).map((c) => (
-                      <li key={c.id} className="flex items-center gap-2 text-muted-foreground">
-                        <Badge variant="outline" className="text-[9px]">V{c.versionNumber}</Badge>
-                        <span className="font-medium text-foreground">{c.label}</span>
-                        <span className="truncate opacity-70">{c.whyMatched[0]}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+              {lastOp.resolution &&
+                lastOp.resolution.kind === 'clarification' && (
+                  <div className="mt-3 rounded-xl border border-amber-300/25 bg-amber-300/5 p-3">
+                    <p className="mb-1.5 text-xs font-semibold text-amber-200">
+                      Clarification: {lastOp.resolution.question}
+                    </p>
+                    <ul className="space-y-0.5 text-[11px]">
+                      {lastOp.resolution.candidates.slice(0, 5).map((c) => (
+                        <li
+                          key={c.id}
+                          className="flex items-center gap-2 text-muted-foreground"
+                        >
+                          <Badge variant="outline" className="text-[9px]">
+                            V{c.versionNumber}
+                          </Badge>
+                          <span className="font-medium text-foreground">
+                            {c.label}
+                          </span>
+                          <span className="truncate opacity-70">
+                            {c.whyMatched[0]}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               {lastResult && (
                 <Tabs defaultValue="op" className="mt-3">
                   <TabsList className="h-8 text-[11px]">
-                    <TabsTrigger value="op" className="h-7">Resolved op</TabsTrigger>
-                    <TabsTrigger value="spoken" className="h-7">Spoken</TabsTrigger>
+                    <TabsTrigger value="op" className="h-7">
+                      Resolved op
+                    </TabsTrigger>
+                    <TabsTrigger value="spoken" className="h-7">
+                      Spoken
+                    </TabsTrigger>
                   </TabsList>
                   <TabsContent value="op" className="mt-2">
                     <pre className="max-h-40 overflow-auto rounded-lg border border-border bg-muted/30 p-2.5 text-[11px] leading-relaxed">
-{lastOp.resolution && lastOp.resolution.kind === 'resolved'
-  ? JSON.stringify(lastOp.resolution.operation, null, 2)
-  : lastOp.resolution
-    ? JSON.stringify({ kind: lastOp.resolution.kind }, null, 2)
-    : '—'}
+                      {lastOp.resolution &&
+                      lastOp.resolution.kind === 'resolved'
+                        ? JSON.stringify(lastOp.resolution.operation, null, 2)
+                        : lastOp.resolution
+                          ? JSON.stringify(
+                              { kind: lastOp.resolution.kind },
+                              null,
+                              2,
+                            )
+                          : '—'}
                     </pre>
                   </TabsContent>
                   <TabsContent value="spoken" className="mt-2">
                     <pre className="max-h-40 overflow-auto rounded-lg border border-border bg-muted/30 p-2.5 text-[11px] leading-relaxed whitespace-pre-wrap">
-{lastResult.plannedText ?? '—'}
+                      {lastResult.plannedText ?? '—'}
                     </pre>
                   </TabsContent>
                 </Tabs>
@@ -949,7 +1107,7 @@ export function VoiceCheckpoint() {
                     ? inputProvider.kind === 'livekit'
                       ? 'LIVEKIT LIVE'
                       : 'MOCK READY'
-                    : 'DISCONNECTED'}
+                    : voiceInputStatus.connectionState.toUpperCase()}
                 </Badge>
               </div>
               <div className="grid grid-cols-2 gap-2.5 text-xs">
@@ -957,15 +1115,24 @@ export function VoiceCheckpoint() {
                   <p className="mb-1 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-muted-foreground">
                     Connection
                   </p>
-                  <p className={`text-sm font-semibold ${voiceInputStatus.connected ? 'text-emerald-300' : 'text-muted-foreground'}`}>
-                    {voiceInputStatus.connected ? 'CONNECTED' : 'idle'}
+                  <p
+                    className={`text-sm font-semibold ${voiceInputStatus.connected ? 'text-emerald-300' : 'text-muted-foreground'}`}
+                  >
+                    {voiceInputStatus.connectionState.toUpperCase()}
                   </p>
                 </div>
+                {voiceInputStatus.error && (
+                  <div className="col-span-2 rounded-xl border border-red-400/30 bg-red-400/10 p-3 text-red-200">
+                    {voiceInputStatus.error}
+                  </div>
+                )}
                 <div className="rounded-xl border border-border bg-muted/30 p-3">
                   <p className="mb-1 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-muted-foreground">
                     Microphone
                   </p>
-                  <p className={`text-sm font-semibold ${voiceInputStatus.capturing ? 'text-cyan-300' : 'text-muted-foreground'}`}>
+                  <p
+                    className={`text-sm font-semibold ${voiceInputStatus.capturing ? 'text-cyan-300' : 'text-muted-foreground'}`}
+                  >
                     {voiceInputStatus.capturing ? 'CAPTURING' : 'off'}
                   </p>
                 </div>
@@ -974,7 +1141,8 @@ export function VoiceCheckpoint() {
                     Last transcript
                   </p>
                   <p className="text-xs leading-relaxed">
-                    {voiceInputStatus.lastTranscript ?? 'No speech yet. Click mic to enable.'}
+                    {voiceInputStatus.lastTranscript ??
+                      'No speech yet. Click mic to enable.'}
                   </p>
                 </div>
               </div>
@@ -998,7 +1166,7 @@ export function VoiceCheckpoint() {
                       : 'border-muted-foreground/40 bg-muted-foreground/10 text-muted-foreground'
                   }`}
                 >
-                  {provider.kind === 'rime' ? 'RIME LIVE' : 'MOCK MODE'}
+                  {provider.kind === 'rime' ? 'RIME PRIMARY' : 'MOCK MODE'}
                 </Badge>
               </div>
               <div className="grid grid-cols-2 gap-2.5 text-xs">
@@ -1006,7 +1174,9 @@ export function VoiceCheckpoint() {
                   <p className="mb-1 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-muted-foreground">
                     Playback
                   </p>
-                  <p className={`text-sm font-semibold ${voiceStatus.playing ? 'text-cyan-300' : 'text-muted-foreground'}`}>
+                  <p
+                    className={`text-sm font-semibold ${voiceStatus.playing ? 'text-cyan-300' : 'text-muted-foreground'}`}
+                  >
                     {voiceStatus.playing ? 'PLAYING' : 'idle'}
                   </p>
                 </div>
@@ -1014,7 +1184,9 @@ export function VoiceCheckpoint() {
                   <p className="mb-1 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-muted-foreground">
                     Active handle
                   </p>
-                  <code className="text-xs font-semibold">{voiceStatus.activeHandleId ?? '—'}</code>
+                  <code className="text-xs font-semibold">
+                    {voiceStatus.activeHandleId ?? '—'}
+                  </code>
                 </div>
                 <div className="col-span-2 rounded-xl border border-border bg-muted/30 p-3">
                   <p className="mb-1 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-muted-foreground">
@@ -1030,7 +1202,9 @@ export function VoiceCheckpoint() {
             <Card className="rounded-[1.3rem] border border-border bg-card p-5 md:p-6">
               <div className="mb-3 flex items-center gap-2">
                 <GitBranch className="size-5 text-primary" />
-                <h2 className="text-base font-semibold">Acceptance demo path</h2>
+                <h2 className="text-base font-semibold">
+                  Acceptance demo path
+                </h2>
               </div>
               <ol className="space-y-1.5 text-xs">
                 {DEMO_SEQUENCE.map((step, i) => (
@@ -1056,7 +1230,9 @@ export function VoiceCheckpoint() {
                       {i + 1}
                     </span>
                     <span className="min-w-0 flex-1 leading-relaxed">
-                      <span className="block font-semibold">{step.label.split(': ')[1] ?? step.label}</span>
+                      <span className="block font-semibold">
+                        {step.label.split(': ')[1] ?? step.label}
+                      </span>
                       <span className="block truncate text-[11px] text-muted-foreground">
                         &quot;{step.transcript}&quot;
                       </span>
@@ -1069,7 +1245,11 @@ export function VoiceCheckpoint() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => void runCommand('Make another version assuming I can spend sixty thousand and prioritize comfort.')}
+                  onClick={() =>
+                    void runCommand(
+                      'Make another version assuming I can spend sixty thousand and prioritize comfort.',
+                    )
+                  }
                   className="h-9 text-xs"
                 >
                   <GitBranch className="size-3.5 mr-1" /> Fork luxury
@@ -1085,7 +1265,9 @@ export function VoiceCheckpoint() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => void runCommand('Compare this with the original.')}
+                  onClick={() =>
+                    void runCommand('Compare this with the original.')
+                  }
                   className="h-9 text-xs"
                 >
                   <GitCompareArrows className="size-3.5 mr-1" /> Compare
@@ -1093,7 +1275,11 @@ export function VoiceCheckpoint() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => void runCommand("Take the hotel from the luxury version but don't change anything else.")}
+                  onClick={() =>
+                    void runCommand(
+                      "Take the hotel from the luxury version but don't change anything else.",
+                    )
+                  }
                   className="h-9 text-xs"
                 >
                   <ArrowDownToLine className="size-3.5 mr-1" /> Merge hotel
@@ -1108,11 +1294,17 @@ export function VoiceCheckpoint() {
                 </Button>
               </div>
               <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-                After step 5, active state should be V1 (₹40,000) with <span className="font-semibold text-foreground">Taj Fort Aguada</span>.
-                After step 7 (undo), state should match the original with <span className="font-semibold text-foreground">Casa Baga</span>.
+                After step 5, active state should be V1 (₹40,000) with{' '}
+                <span className="font-semibold text-foreground">
+                  Taj Fort Aguada
+                </span>
+                . After step 7 (undo), state should match the original with{' '}
+                <span className="font-semibold text-foreground">Casa Baga</span>
+                .
               </p>
               <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-                Undo points: up to {undoDepth} operations can be reverted on this graph.
+                Undo points: up to {undoDepth} operations can be reverted on
+                this graph.
               </p>
             </Card>
           </aside>

@@ -1,162 +1,264 @@
 # Voice Checkpoint
 
-Voice Checkpoint is a generic semantic state engine for branching, switching, comparing,
-selectively merging, and undoing structured decisions, end-to-end wired from natural-language
-voice input through typed state operations to spoken Rime voice output.
+> **Think out loud. Change your mind. Keep every version.**
 
-## Architecture
+Voice Checkpoint is a voice-first decision workspace that treats a conversation like version control. Speak a plan, branch into an alternative, compare the two, merge only the part you want, and undo any change without losing the reasoning that led there.
+
+The demo uses a Goa trip because the result is easy to see, but the state engine is generic. The same graph can manage product requirements, event plans, budgets, research decisions, hiring criteria, or any other structured decision.
+
+🎬 **[Watch the narrated two-minute demo](evidence/voice-checkpoint-demo.mp4)**
+
+## The problem
+
+Voice assistants usually overwrite context. When someone says “try a more comfortable version,” the old plan disappears into chat history. A later request such as “keep the original budget, but take the new hotel” forces the assistant to reconstruct state from prose and hope it understood the references correctly.
+
+Voice Checkpoint makes those changes explicit:
+
+- Every accepted command becomes a typed state operation.
+- Every meaningful version becomes an immutable checkpoint.
+- Branches remain isolated, so experimentation cannot corrupt the original.
+- Comparisons work on semantic fields instead of text.
+- Selective merge copies only the requested fields.
+- Undo restores the exact graph snapshot, including the active checkpoint.
+
+## The USP
+
+Most voice products optimize the conversation. Voice Checkpoint protects the **decision state behind the conversation**.
+
+| Typical assistant | Voice Checkpoint |
+|---|---|
+| Rewrites a plan in chat | Creates an immutable branch |
+| Describes differences in prose | Computes a field-level semantic diff |
+| Copies an entire answer | Merges only selected state paths |
+| “Undo” generates another answer | Restores the exact previous graph |
+| Late audio can overwrite a newer turn | Generation fencing rejects stale work |
+| Domain data is embedded in UI logic | Generic JSON-compatible semantic state |
+
+This makes voice safe for exploratory work. Users can ask “what if?”, inspect the consequences, keep one detail, and return to any previous decision without starting over.
+
+## Winning demo flow
+
+Say these commands in order:
+
+1. **“Plan a five-day trip to Goa for forty thousand rupees.”**
+2. **“Make another version assuming I can spend sixty thousand and prioritize comfort.”**
+3. **“Compare this with the original.”**
+4. **“Go back to the original.”**
+5. **“Take the hotel from the luxury version but don't change anything else.”**
+6. **“What changed?”**
+7. **“Undo that.”**
+
+The decisive moment is step five. The active branch adopts **Taj Fort Aguada** from the comfort branch while keeping the original **₹40,000 budget** and **Konkan Express**. Undo then restores the complete pre-merge graph exactly. Version two remains available throughout.
+
+## How it works
+
+```mermaid
+flowchart LR
+    A[Browser microphone] --> B[LiveKit room]
+    B --> C[STT worker]
+    C --> D[Final transcript buffer]
+    D --> E[Voice intent resolver]
+    E --> F[Typed state operation]
+    F --> G[Checkpoint graph]
+    G --> H[Response planner]
+    H --> I[Server TTS proxy]
+    I --> J[Rime speech]
+    J --> K[Browser playback]
+
+    L[Generation gate] -. rejects stale turns .-> E
+    L -. cancels stale audio .-> J
+```
+
+### 1. LiveKit carries realtime speech
+
+The browser joins a short-lived LiveKit room and publishes the microphone track. A Python worker named `voice-checkpoint-transcriber` subscribes to that room, uses LiveKit Inference with `deepgram/nova-3-general`, and publishes transcription events back to the browser.
+
+Live speech engines can emit one sentence as several final segments. The input adapter buffers consecutive final segments for 1.5 seconds and submits them as one command, so:
 
 ```text
-Microphone / Text transcript
-         │
-         ▼
- VoiceInputProvider (LiveKit STT / Mock)
-         │  turn_start → final_transcript → turn_end
-         ▼
- Phase 2 resolver
-  ├─ VoiceIntentResolver ──► typed StateOperation
-  ├─ ReferenceResolver         │
-  ├─ ambiguity/clarify          │
-  └─ GenerationGate (stale)    ▼
-                       StateGraph<T> (Phase 1)
-                   ┌──────┬──────┴──────┬──────┐
-                   ▼      ▼             ▼      ▼
-                 Diff   Merge         Undo   Compare
-                   └──────┬─────────────┴──────┘
-                          ▼
-            immutable Checkpoint / GraphSnapshot
-                          │
-                          ▼
-               ResponsePlanner (spoken plan)
-                          │
-                          ▼
-         VoiceOutputProvider (Rime / Mock)  ───► user hears audio
+“Make another version assuming I can spend sixty thousand”
+“and prioritize comfort”
 ```
 
-Every mutation goes through `StateGraph.execute(StateOperation)`. The voice layer never
-mutates semantic state directly. A central `GenerationGate` issues monotonically
-increasing tokens; any playback or result belonging to an older generation is dropped
-before reaching the user.
+becomes one fork containing both the ₹60,000 budget and the comfort priority.
 
-## Phases
+### 2. The resolver produces typed operations
 
-### Phase 1 — Semantic state engine (complete)
+Speech never mutates application state directly. `VoiceIntentResolver` maps a transcript to one of the engine’s operations:
 
-- Typed `StateOperation` union: `CREATE`, `UPDATE`, `FORK`, `SWITCH_CHECKPOINT`,
-  `MERGE`, `COMPARE`, `UNDO`, `REWIND`, `RESET`.
-- `StateGraph<T>`: immutable checkpoints, deep-clone reads, exact-UNDO graph-level snapshots.
-- `DiffEngine` + `MergeEngine`: classified field-level diffs; selective MERGE on named fields only.
-- `ReferenceResolver`: label / version-number / budget / adjective disambiguation → candidate list.
-- Natural-language `IntentResolver` (Phase 1 narrow deterministic) + `VoiceIntentResolver` (Phase 2 enriched).
-- 54/54 node:test tests passing.
+```ts
+type StateOperation<T> =
+  | { type: 'FORK'; sourceCheckpointId: string; changes: Partial<T> }
+  | { type: 'SWITCH_CHECKPOINT'; checkpointId: string }
+  | { type: 'COMPARE'; fromCheckpointId: string; toCheckpointId: string }
+  | { type: 'MERGE'; sourceCheckpointId: string; targetCheckpointId: string; fields: string[] }
+  | { type: 'UPDATE_STATE'; checkpointId: string; changes: Partial<T> }
+  | { type: 'REWIND'; steps: number }
+  | { type: 'UNDO' };
+```
 
-### Phase 2 — Voice input & turn fencing (boundary + wired logic complete)
+Ambiguous references return a clarification result without mutating the graph. Unsupported commands also leave state untouched.
 
-- `VoiceInputProvider` contract + 2 implementations:
-  - `LiveKitSttProvider`: LiveKit STT boundary; requires `LIVEKIT_URL`, API key/secret.
-    Throws clearly if credentials are missing. The event stream is:
-    `connection → turn_start → vad_start → interim_transcript → final_transcript → vad_end → turn_end → error`.
-  - `MockVoiceInputProvider`: STT-less for local dev/tests. `pushTranscript()` simulates a
-    full VAD/turn cycle so the pipeline can be exercised without audio hardware.
-- `VoiceOrchestrator`: transcript → resolve → execute → diff.
-- `GenerationGate`: monotonic token; `isStale(result)` fences every playback + render.
-- Architecture boundary: **every** spoken input still becomes a typed `StateOperation`
-  via the existing resolver; the STT boundary is a thin event stream of transcript
-  strings into the existing `VoicePipeline.submit()` entry point.
+### 3. The semantic engine owns truth
 
-### Phase 3 — Rime voice output & interruptible playback (boundary + UI complete)
+`StateGraph` is the only layer allowed to change semantic state. It delegates comparison and selective copying to `DiffEngine` and `MergeEngine`. Checkpoints contain cloned structured state, ancestry, branch identity, version number, timestamps, and the instruction that produced them.
 
-- `VoiceOutputProvider` contract: `speak(text, { generation, checkpointId })`, `cancel(id)`, `getStatus()`.
-- `RimeVoiceOutputProvider`: credentials from env; falls back to `MockVoiceOutputProvider`.
-- `MockVoiceOutputProvider`: deterministic, inspectable `getSpokenLog()` + cancellable utterances.
-- `ResponsePlanner`: text-generation layer tailored to each operation (FORK, SWITCH, MERGE, COMPARE, UNDO,
-  UPDATE, CLONE, clarification, unsupported).
-- `VoicePipeline`: single-entrypoint `submit(transcript)` returns `{ orchestration, plan, handle, isStale, generation }`.
-- Interrupt path: call `GenerationGate.issueToken()` before issuing a new submission; any
-  in-flight older generation is auto-suppressed at both render and provider boundaries.
-- Polished judge-ready UI: `voice-checkpoint` page drives the real state engine with the
-  7-step demo, Demo Reset, generation/stale fencing, and voice status.
+The engine does not know about trips, microphones, or speech providers. Any JSON-compatible record can be checkpointed:
 
-## Setup
+```ts
+const graph = new StateGraph({
+  repository: 'mobile-app',
+  strategy: 'incremental rollout',
+  risk: 2,
+});
+```
 
-Node.js 22.13 or newer.
+### 4. Rime speaks the committed result
+
+After an operation is accepted, `ResponsePlanner` creates a concise spoken confirmation. The browser sends it to `POST /api/rime-tts`; the server adds the private Rime credential and streams the returned MP3 back for playback.
+
+The credential never enters the client bundle. There is no browser speech fallback in the production provider, so a successful spoken response is evidence that the Rime path ran.
+
+### 5. Generation fencing makes interruption safe
+
+Every turn receives a monotonically increasing generation token. Starting a newer turn immediately invalidates older resolver work and aborts older speech requests. Before state mutation and before playback, the pipeline verifies that the generation and checkpoint are still current.
+
+This prevents the classic realtime race where a slow response from an old command speaks over or mutates a newer decision.
+
+## Run it and speak yourself
+
+### Requirements
+
+- Node.js **22.13 or newer**
+- Python **3.11 or newer**
+- A Rime API key
+- A LiveKit Cloud URL, API key, and API secret
+- Browser microphone permission for `localhost`
+
+### Install
 
 ```bash
+nvm install
+nvm use
 npm install
-npm run dev
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements-voice.txt
+cp .env.example .env.local
 ```
+
+Add your credentials to `.env.local`. Keep the variable names exactly as shown in `.env.example`.
+
+### Start the complete voice stack
+
+```bash
+npm run dev:voice
+```
+
+This command validates Node, checks the required environment values and Python packages, then starts both the web app and the LiveKit transcription worker. Pressing `Ctrl+C` stops both.
+
+Open [http://localhost:3000](http://localhost:3000), then:
+
+1. Click the microphone button beside **Resolve & Speak**.
+2. Allow microphone access when the browser asks.
+3. Wait for **LIVEKIT LIVE**, **CONNECTED**, and **CAPTURING**.
+4. Speak one complete command at a natural pace.
+5. Watch interim words appear in cyan, followed by the resolved operation, graph update, and spoken response.
+
+You can also type into the same command box and click **Resolve & Speak**. Typed and spoken commands pass through the same resolver, state engine, generation gate, and Rime output path.
+
+## Why the microphone may appear to do nothing
+
+Running `npm run dev` starts only the website. It does not start the Python transcription worker. In that state, the browser may connect and publish audio, but nobody is present in the room to turn that audio into text. Use `npm run dev:voice` for an interactive voice session.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Page does not start and mentions `fs/promises` or `glob` | Node is too old | Install Node 22.13+ and run `node --version` |
+| Token endpoint reports missing credentials | `.env.local` is absent or incomplete | Copy `.env.example` and fill the four required credentials |
+| Status is connected and capturing, but no words appear | STT worker is not running or registered | Stop the processes and restart with `npm run dev:voice` |
+| Browser denies the microphone | Site permission is blocked | Allow microphone access for `http://localhost:3000`, then click the mic again |
+| Transcript appears but no voice plays | Rime request failed or playback was blocked | Check the web terminal for the Rime request status and interact with the page once |
+| Only half a sentence resolves | Pause between phrases exceeded the final-segment window | Speak the command continuously; the adapter combines segments within 1.5 seconds |
 
 ## Environment variables
 
-LiveKit / Rime credentials. Server-side only — never expose the API secret to client code.
+| Variable | Purpose | Default |
+|---|---|---|
+| `RIME_API_KEY` | Server-side Rime bearer credential | required |
+| `RIME_ENDPOINT` | Rime synthesis endpoint | `https://users.rime.ai/v1/rime-tts` |
+| `RIME_MODEL` | Rime model | `coda` |
+| `RIME_VOICE` | Rime speaker | `celeste` |
+| `RIME_LANGUAGE` | Speech language | `en` |
+| `RIME_AUDIO_FORMAT` | Returned audio format | `mp3` |
+| `LIVEKIT_URL` | LiveKit Cloud WebSocket URL | required |
+| `LIVEKIT_API_KEY` | Server-side LiveKit API key | required |
+| `LIVEKIT_API_SECRET` | Server-side LiveKit API secret | required |
+| `LIVEKIT_AGENT_NAME` | Explicit worker dispatch name | `voice-checkpoint-transcriber` |
+| `LIVEKIT_STT_MODEL` | LiveKit Inference STT model | `deepgram/nova-3-general` |
 
-| Variable              | Purpose                                      | Default    |
-|-----------------------|----------------------------------------------|------------|
-| `LIVEKIT_URL`         | WebSocket endpoint for your LiveKit project  | —          |
-| `LIVEKIT_API_KEY`     | Server-side API key                          | —          |
-| `LIVEKIT_API_SECRET`  | Server-side API secret                       | —          |
-| `RIME_MODEL`          | Rime TTS model name                          | `rime-1`   |
-| `RIME_VOICE`          | Rime TTS voice                               | `af_sky`   |
-| `RIME_LANGUAGE`       | BCP-47 language tag used by both STT and TTS | `en-IN`    |
+All credentials stay in ignored `.env.local`. The token route issues a short-lived room token to the browser. The LiveKit API secret and Rime API key remain server-side.
 
-If any of the three required LiveKit variables are absent, both the input and output
-factories fall back to their mock providers deterministically so the whole app still runs
-locally.
+## Engine guarantees
 
-## Tests
+The automated suite proves these behaviors:
+
+- A fork cannot mutate its parent checkpoint.
+- Switching restores the exact selected branch state.
+- Diff classifies changed and unchanged semantic paths.
+- Merge changes only the requested paths, including nested fields.
+- Undo restores the complete previous graph by strict deep equality.
+- Returned snapshots cannot contaminate internal graph state.
+- Ambiguous language cannot mutate state.
+- A stale generation cannot mutate the graph or play audio.
+- Rapid supersession cancels every older in-flight voice request.
+- Default LiveKit reconnects use fresh rooms so the worker is dispatched again.
+
+Run the complete validation suite:
 
 ```bash
-npm test                 # 54/54 — Phase 1 + Phase 2 + Phase 3
-npx tsc --noEmit         # strict typecheck
-npm run lint             # oxlint — jsx-a11y, react-compiler, typescript rules
-npm run build            # production build (vinext)
+npm test
+npx tsc --noEmit
+npm run lint
+npm run build
+python -m py_compile voice_agent.py
 ```
 
-The suite covers: state isolation, switching, selective merge, diff classification,
-exact undo, contamination resistance, nested ancestry, natural-language operation mapping,
-ambiguity handling, 7-step deterministic demo flow, generation/stale fencing, interruption,
-provider cancellation, mock/Rime factory fallback, and Demo Reset idempotency.
+The repository currently contains **63 deterministic tests**, including the full acceptance path and the regression for “₹60,000 and prioritize comfort.” Live credential verification notes are documented in [RIME_EVIDENCE.md](RIME_EVIDENCE.md).
 
-## Deterministic judge demo
+## Project structure
 
-The 7-step sequence in `lib/demo.ts` → `DEMO_SEQUENCE` runs against the real state engine.
-Reset the graph to its seed state at any time with the **Reset Demo** button.
+```text
+app/
+  api/livekit-token/     short-lived browser token endpoint
+  api/rime-tts/          server-side Rime streaming proxy
+  voice-checkpoint.tsx   complete interactive demo UI
+lib/
+  state/                 generic graph, diff, merge, undo, and value helpers
+  voice/                 input, intent, references, orchestration, fencing, and output
+scripts/
+  dev-voice.mjs          one-command local voice stack
+tests/                   Phase 1, Phase 2, and Phase 3 regression suites
+voice_agent.py           LiveKit STT-only worker
+evidence/                narrated demo video
+```
 
-1. *Plan a five-day trip to Goa for forty thousand rupees.*        → V1: ₹40k, Casa Baga
-2. *Make another version assuming I can spend sixty thousand rupees, stay at Taj Fort Aguada, take a flight, and prioritize comfort.*  → V2 (fork): ₹60k, Taj Fort Aguada
-3. *Compare this with the original.*                                → COMPARE vs V1
-4. *Go back to the original.*                                       → SWITCH active = V1
-5. *Take the hotel from the luxury version but don't change anything else.* → MERGE accommodation V2→V1, keep ₹40k
-6. *Compare this with the previous version.*                        → COMPARE (new V1' vs prior V1 — hotel differs)
-7. *Undo that.*                                                     → UNDO → graph restored before step 5
+## Technology
 
-After step 5: `budget === 40000 && accommodation === 'Taj Fort Aguada'`.
-After step 7: `budget === 40000 && accommodation === 'Casa Baga'`.
+- **React 19** for the interactive workspace
+- **Vinext and Vite** for the application and server routes
+- **TypeScript** for the engine, adapters, and UI
+- **LiveKit Cloud** for realtime rooms, microphone transport, worker dispatch, and transcription events
+- **LiveKit Agents for Python** for the STT worker
+- **Rime** for production speech synthesis
+- **Tailwind CSS and Base UI** for the interface
+- **Node’s test runner** for deterministic state and pipeline tests
 
-## LiveKit / Rime deployment notes
+## Phase boundaries
 
-1. Mint short-lived LiveKit access tokens on the server; never ship `LIVEKIT_API_SECRET` to the browser.
-2. Wire the body of `RimeVoiceOutputProvider.speak()` to the LiveKit Rime TTS output track
-   lifecycle and keep the `context.generation` pre-check so stale audio never plays.
-3. Wire `LiveKitSttProvider.start()` / internal events to the LiveKit `RimeStt` adapter so
-   `final_transcript` events call `VoicePipeline.submit(transcript)` through the same
-   orchestration path used by text entry.
-4. Keep `GenerationGate.issueToken()` the single fence point for new turns.
+The system is deliberately layered so integrations can evolve without weakening state correctness:
 
-## Limitations
+- **Phase 1:** generic semantic state, checkpoints, branch isolation, diff, selective merge, and exact undo
+- **Phase 2:** natural-language commands, reference resolution, orchestration, and generation fencing
+- **Phase 3:** LiveKit microphone input, STT worker, Rime output, interruption, and the polished demo UI
 
-- **No real audio was produced in this sandbox.** LiveKit credentials are required for
-  actual LiveKit STT + Rime TTS. The `MockVoiceOutputProvider` + `MockVoiceInputProvider`
-  paths are authoritative for interface behavior. See `RIME_EVIDENCE.md` for the exact
-  verification boundary.
-- `@livekit/*` client packages are **not** installed as npm dependencies; add them for a
-  production deployment and replace the fallback bodies of
-  `LiveKitSttProvider.start()` / `RimeVoiceOutputProvider.speak()` while keeping their
-  contracts.
-- Undo is session-local / in-memory and restores the full `GraphSnapshot`.
-- Natural-language coverage is intentionally narrow for Phase 1/2. Replace or wrap
-  `VoiceIntentResolver` with an LLM while still emitting the same `StateOperation` union.
-
-See [EVALUATION.md](./EVALUATION.md) for Phase 1 acceptance method and measured results.
-See [RIME_EVIDENCE.md](./RIME_EVIDENCE.md) for the verified (not fabricated) boundary,
-test procedure, and reproduction commands for the Rime integration.
+The Phase 1 API remains stable underneath every later integration. Voice is an interface to the engine, never a replacement for it.
