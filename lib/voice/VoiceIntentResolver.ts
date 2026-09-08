@@ -1,4 +1,4 @@
-import type { Checkpoint, CheckpointMeta, SemanticState, StateOperation } from '../state/types.ts';
+import type { Checkpoint, CheckpointMeta, SemanticState } from '../state/types.ts';
 import { parseCurrencyAmount, ReferenceResolver } from './ReferenceResolver.ts';
 import type { Candidate, ResolutionResult } from './types.ts';
 
@@ -194,7 +194,7 @@ function makeMeta(label: string, instruction: string, summary?: string): Checkpo
   };
 }
 
-function clarify(text: string, fallback: Candidate[]): ResolutionResult {
+function clarify<T extends SemanticState>(text: string, fallback: Candidate[]): ResolutionResult<T> {
   if (!fallback.length) {
     return { kind: 'clarification', question: text, candidates: [] };
   }
@@ -218,7 +218,7 @@ export class VoiceIntentResolver<T extends SemanticState = SemanticState> {
       return { kind: 'resolved', operation: { type: 'UNDO' } };
     }
 
-    if (/compare|mukabla|muqabla|kya antar hai|difference|kya farak hai|compare karo|tulna/i.test(text)) {
+    if (/compare|mukabla|muqabla|kya antar hai|difference|kya farak hai|compare karo|tulna|what changed|kya badla/i.test(text)) {
       if (!active) return clarify('Which two versions should I compare?', checkpoints.map((c) => ({ id: c.id, label: c.label, versionNumber: c.versionNumber, whyMatched: ['all'] })));
       const candidates = this.refs.resolve(text, checkpoints, activeCheckpointId, { excludeActive: true });
       if (candidates.length === 1) {
@@ -262,7 +262,7 @@ export class VoiceIntentResolver<T extends SemanticState = SemanticState> {
       const specifiedFields = detectFields(text);
       if (specifiedFields.length === 0 && /hotel|stay|room|accommodation/i.test(text)) specifiedFields.push('accommodation');
       if (specifiedFields.length === 0) specifiedFields.push('accommodation');
-      const keepRest = /but\s+(?:keep|don.?t change|don\'t change|dont change|leave|mat karna|change mat karna|baaki|baki)/i.test(text) ||
+      const keepRest = /but\s+(?:keep|don.?t change|don't change|dont change|leave|mat karna|change mat karna|baaki|baki)/i.test(text) ||
         /(?:sirf|only|sif|bas)\s+.*\s*(?:le\s+lo|change|merge)/i.test(text);
       if (keepRest) {
         // no-op semantically — selective merge is naturally rest-preserving

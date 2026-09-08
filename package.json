@@ -24,6 +24,8 @@
     "date-fns": "4.1.0",
     "embla-carousel-react": "8.5.2",
     "input-otp": "1.4.2",
+    "livekit-client": "^2.22.3",
+    "livekit-server-sdk": "^2.18.0",
     "lucide-react": "1.31.0",
     "react": "19.2.6",
     "react-day-picker": "9.8.1",

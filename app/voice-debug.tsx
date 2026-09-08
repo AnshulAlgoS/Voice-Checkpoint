@@ -24,7 +24,7 @@ export function VoiceDebug() {
   const [diff, setDiff] = useState<StateDiff | null>(null);
   const [transcript, setTranscript] = useState('');
   const [lastResolution, setLastResolution] = useState<ResolutionResult<TripState> | null>(null);
-  const [lastGeneration, setLastGeneration] = useState<string>('');
+  const [_lastGeneration, setLastGeneration] = useState<string>('');
   const [taskGeneration, setTaskGeneration] = useState<string>('');
   const [wasStale, setWasStale] = useState(false);
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err' | 'info' | 'warn'; text: string } | null>(null);
@@ -54,9 +54,9 @@ export function VoiceDebug() {
         op && 'fromCheckpointId' in op ? op.fromCheckpointId : '',
       );
       setTargetCp(
-        op && 'checkpointId' in op ? op.checkpointId :
-        op && 'targetCheckpointId' in op && op.targetCheckpointId ? op.targetCheckpointId :
-        op && 'toCheckpointId' in op ? op.toCheckpointId :
+        op && 'checkpointId' in op ? (op.checkpointId ?? '') :
+        op && 'targetCheckpointId' in op ? (op.targetCheckpointId ?? '') :
+        op && 'toCheckpointId' in op ? (op.toCheckpointId ?? '') :
         inner.execution.checkpoint?.id ?? '',
       );
       setSnapshot(inner.execution.snapshot);
@@ -116,13 +116,14 @@ export function VoiceDebug() {
 
         <div className="grid gap-4 md:grid-cols-2">
           <div>
-            <label className="mb-2 block text-xs font-bold uppercase tracking-[0.13em] text-muted-foreground">Transcript</label>
+            <label htmlFor="transcript-input" className="mb-2 block text-xs font-bold uppercase tracking-[0.13em] text-muted-foreground">Transcript</label>
             <div className="flex flex-col gap-2 sm:flex-row">
               <Input
+                id="transcript-input"
                 value={transcript}
                 onChange={(e) => setTranscript(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && run()}
-                placeholder='Try: "Take the hotel from the luxury version but don\'t change anything else."'
+                placeholder="Try: &quot;Take the hotel from the luxury version but don&apos;t change anything else.&quot;"
                 className="h-11 bg-background"
               />
               <Button onClick={run} className="h-11 px-5">Resolve</Button>

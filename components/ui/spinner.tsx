@@ -1,15 +1,16 @@
 import { cn } from '@/lib/utils';
 import { Loader2Icon } from 'lucide-react';
 
-function Spinner({ className, ...props }: React.ComponentProps<'svg'>) {
+function Spinner({ className, ...props }: React.ComponentProps<'output'>) {
   return (
-    <Loader2Icon
+    <output
       data-slot="spinner"
-      role="status"
       aria-label="Loading"
-      className={cn('size-4 animate-spin', className)}
+      className={cn('inline-flex items-center justify-center', className)}
       {...props}
-    />
+    >
+      <Loader2Icon aria-hidden className={cn('size-4 animate-spin', className)} />
+    </output>
   );
 }
 
