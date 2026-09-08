@@ -49,17 +49,54 @@ interface LiveKitSttOptions {
 
 function readEnv(key: string): string | undefined {
   try {
-    const v = (globalThis as unknown as { process?: { env?: Record<string, string> } }).process?.env?.[key];
-    return v && v.length ? v : undefined;
-  } catch {
-    return undefined;
-  }
+    const processEnv = (globalThis as unknown as { process?: { env?: Record<string, string> } }).process?.env;
+    if (processEnv) {
+      const v = processEnv[key];
+      if (v && v.length) return v;
+    }
+  } catch { /* noop */ }
+  try {
+    const meta = (globalThis as unknown as { import?: { meta?: { env?: Record<string, string> } } }).import?.meta?.env;
+    if (meta) {
+      const direct = meta[key];
+      if (direct && direct.length) return direct;
+      if (key === 'LIVEKIT_URL') {
+        const alt1 = meta.VITE_LIVEKIT_URL;
+        const alt2 = meta.NEXT_PUBLIC_LIVEKIT_URL;
+        const alt3 = meta.PUBLIC_LIVEKIT_URL;
+        if (alt1 && alt1.length) return alt1;
+        if (alt2 && alt2.length) return alt2;
+        if (alt3 && alt3.length) return alt3;
+      }
+      if (key === 'RIME_MODEL') {
+        const alt = meta.VITE_RIME_MODEL;
+        if (alt && alt.length) return alt;
+      }
+      if (key === 'RIME_VOICE') {
+        const alt = meta.VITE_RIME_VOICE;
+        if (alt && alt.length) return alt;
+      }
+      if (key === 'RIME_LANGUAGE') {
+        const alt = meta.VITE_RIME_LANGUAGE;
+        if (alt && alt.length) return alt;
+      }
+    }
+  } catch { /* noop */ }
+  return undefined;
+}
+
+function isBrowserRuntime(): boolean {
+  return typeof window !== 'undefined' && typeof document !== 'undefined';
 }
 
 export function hasLiveKitCredentials(options: LiveKitSttOptions = {}): boolean {
   const url = options.livekitUrl ?? readEnv('LIVEKIT_URL');
+  if (!url) return false;
   const key = options.livekitApiKey ?? readEnv('LIVEKIT_API_KEY');
   const secret = options.livekitApiSecret ?? readEnv('LIVEKIT_API_SECRET');
+  if (isBrowserRuntime()) {
+    return Boolean(url) || Boolean(key && secret);
+  }
   return Boolean(url && key && secret);
 }
 
