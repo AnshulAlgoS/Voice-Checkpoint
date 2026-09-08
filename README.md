@@ -225,7 +225,7 @@ npm run build
 python -m py_compile voice_agent.py
 ```
 
-The repository currently contains **63 deterministic tests**, including the full acceptance path and the regression for “₹60,000 and prioritize comfort.” Live credential verification notes are documented in [RIME_EVIDENCE.md](RIME_EVIDENCE.md).
+The repository currently contains **64 deterministic tests**, including the full acceptance path and regressions for “₹60,000 and prioritize comfort” and “a trip to Kerala in fifty thousand rupees.” Live credential verification notes are documented in [RIME_EVIDENCE.md](RIME_EVIDENCE.md).
 
 ## Project structure
 

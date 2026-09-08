@@ -271,6 +271,13 @@ const TRANSPORT_VALUES: Record<string, string> = {
   own: 'Own vehicle',
 };
 
+function formatDestination(value: string): string {
+  return value
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
 function extractFieldValues(
   text: string,
   state: SemanticState | undefined,
@@ -299,18 +306,23 @@ function extractFieldValues(
     }
   }
   if (state && typeof state.destination === 'string') {
-    const destMatch = text.match(
-      /(?:destination|jagah|place|for)\s+(?:is|to|ko|mein|hai|trip)?\s*["'`]?([A-Z][A-Za-z\s-]{1,40})/,
-    );
-    if (destMatch) changes.destination = destMatch[1].trim();
+    const destinationPatterns = [
+      /\btrip\s+(?:to|in)\s+([a-z][a-z\s-]{1,40}?)(?=\s+(?:for|in|under|within|with|on)\b|[,.;!?]|$)/i,
+      /\b(?:visit|visiting|go(?:ing)?\s+to)\s+([a-z][a-z\s-]{1,40}?)(?=\s+(?:for|in|under|within|with|on)\b|[,.;!?]|$)/i,
+      /(?:destination|jagah|place)\s+(?:is|to|ko|mein|hai)?\s*["'`]?([a-z][a-z\s-]{1,40}?)(?=\s+(?:for|in|under|within|with|on)\b|[,.;!?]|$)/i,
+    ];
+    for (const pattern of destinationPatterns) {
+      const destinationMatch = text.match(pattern);
+      if (destinationMatch) {
+        changes.destination = formatDestination(destinationMatch[1]);
+        break;
+      }
+    }
     if (!changes.destination) {
       const simple = text.match(
         /\b(Goa|Kerala|Rajasthan|Jaipur|Udaipur|Mumbai|Delhi|Bangalore|Chennai|Kolkata|Shimla|Manali|Ladakh|Andaman)\b/i,
       );
-      if (simple)
-        changes.destination = simple[1].replace(/\b\w/g, (c) =>
-          c.toUpperCase(),
-        );
+      if (simple) changes.destination = formatDestination(simple[1]);
     }
   }
   for (const { field, alias } of FLAT_ALIASES) {
@@ -673,6 +685,46 @@ export class VoiceIntentResolver<T extends SemanticState = SemanticState> {
           sourceCheckpointId: base.id,
           changes,
           meta: makeMeta(label, transcript, 'Forked decision state'),
+        },
+      };
+    }
+
+    const tripDescriptionLike =
+      /\b(?:plan|create|start|design)\b.*\btrip\b/i.test(text) ||
+      /\btrip\s+(?:to|in|under|within|for)\b/i.test(text);
+
+    if (tripDescriptionLike) {
+      if (!active)
+        return {
+          kind: 'unsupported',
+          reason: 'Create a checkpoint first before describing a trip.',
+        };
+      const changes = extractChanges(
+        transcript,
+        active.structuredState,
+      ) as Partial<T>;
+      if (!Object.keys(changes).length)
+        return {
+          kind: 'unsupported',
+          reason: `I could not identify any trip fields from: ${transcript}`,
+        };
+      const labelParts: string[] = [];
+      if ('destination' in changes && typeof changes.destination === 'string')
+        labelParts.push(changes.destination);
+      if ('budget' in changes && typeof changes.budget === 'number')
+        labelParts.push(`₹${Math.round(Number(changes.budget) / 1000)}k`);
+      return {
+        kind: 'resolved',
+        operation: {
+          type: 'UPDATE_STATE',
+          changes,
+          meta: makeMeta(
+            labelParts.length
+              ? labelParts.join(' · ')
+              : `${active.label} · trip updated`,
+            transcript,
+            'Trip plan updated on active branch',
+          ),
         },
       };
     }

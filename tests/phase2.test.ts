@@ -121,6 +121,30 @@ test('Phase 2 UPDATE_STATE: change budget to fifty thousand', () => {
   assert.equal(outcome.checkpoint!.parentId, 'cp-1');
 });
 
+test('Phase 2 natural trip description updates destination and budget', () => {
+  const graph = createDemoGraph();
+  const resolver = new VoiceIntentResolver<TripState>();
+  const original = graph.active!;
+  const result = resolver.resolve(
+    'A trip to Kerala in fifty thousand rupees.',
+    graph.list(),
+    original.id,
+  );
+
+  assert.equal(result.kind, 'resolved');
+  if (result.kind !== 'resolved') return;
+  assert.equal(result.operation.type, 'UPDATE_STATE');
+  if (result.operation.type !== 'UPDATE_STATE') return;
+  assert.equal(result.operation.changes.destination, 'Kerala');
+  assert.equal(result.operation.changes.budget, 50000);
+
+  const updated = graph.execute(result.operation).checkpoint!;
+  assert.equal(updated.structuredState.destination, 'Kerala');
+  assert.equal(updated.structuredState.budget, 50000);
+  assert.equal(graph.get(original.id).structuredState.destination, 'Goa');
+  assert.equal(graph.get(original.id).structuredState.budget, 40000);
+});
+
 test('Phase 2 ambiguous reference returns clarification without mutation', () => {
   const graph = createDemoGraph();
   forkLuxury(graph);

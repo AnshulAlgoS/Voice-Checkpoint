@@ -97,7 +97,7 @@ An agentic Brave run then connected a real microphone track, received an explici
 | 6. What changed? | `COMPARE` active checkpoint with its parent. | Diff shows only accommodation changed. | Explains that only the stay changed and ten fields remain equal. |
 | 7. Undo that. | `UNDO`. | Exact pre-merge graph returns: V1 active, ₹40,000, Casa Baga. | Confirms restoration. |
 
-The full seven-command text/transcript path was verified both in the 63-test suite and in the browser UI. The browser visibly showed V3 with Taj Fort Aguada and ₹40,000 after step 5, only `STAY` in the step-6 diff, and V1/Casa Baga/₹40,000 after undo.
+The full seven-command text/transcript path was verified both in the 64-test suite and in the browser UI. The browser visibly showed V3 with Taj Fort Aguada and ₹40,000 after step 5, only `STAY` in the step-6 diff, and V1/Casa Baga/₹40,000 after undo.
 
 With Rime configured, a rapid seven-command browser run exercised real cancellation. Only generation 7 produced the final assistant playback/render, `LAST SPOKEN` contained the undo response, and the visible graph ended on V1 with ₹40,000 and Casa Baga. Older Rime completions did not overwrite the UI.
 
@@ -129,7 +129,7 @@ PATH=/Users/anshulsaxena/.cache/codex-runtimes/codex-primary-runtime/dependencie
 
 Observed results:
 
-- Tests: **63 passed, 0 failed**.
+- Tests: **64 passed, 0 failed**.
 - Typecheck: **passed**.
 - Lint: **passed**.
 - Production build: **passed**; `/api/livekit-token` and `/api/rime-tts` were included.
@@ -163,7 +163,7 @@ Completed and verified locally:
 - Browser playback of production Rime audio
 - LiveKit Cloud project authentication
 - LiveKit STT worker registration
-- 63 tests, typecheck, build, and lint
+- 64 tests, typecheck, build, and lint
 
 Implemented and awaiting a microphone-driven browser run:
 
