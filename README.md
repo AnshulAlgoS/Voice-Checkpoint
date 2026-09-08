@@ -6,7 +6,9 @@ Voice Checkpoint is a voice-first decision workspace that treats a conversation 
 
 The demo uses a Goa trip because the result is easy to see, but the state engine is generic. The same graph can manage product requirements, event plans, budgets, research decisions, hiring criteria, or any other structured decision.
 
-🎬 **[Watch the narrated two-minute demo](evidence/voice-checkpoint-demo.mp4)**
+🎬 **[Download and watch the narrated two-minute demo](https://github.com/AnshulAlgoS/Voice-Checkpoint/releases/download/demo-v1/voice-checkpoint-demo.mp4)** · [Release page](https://github.com/AnshulAlgoS/Voice-Checkpoint/releases/tag/demo-v1)
+
+The full 1080p MP4 is published as a GitHub Release asset so it opens without the repository file viewer's size limitation.
 
 ## The problem
 
