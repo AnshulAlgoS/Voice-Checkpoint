@@ -122,7 +122,7 @@ export function VoiceDebug() {
                 value={transcript}
                 onChange={(e) => setTranscript(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && run()}
-                placeholder='Try: "Take the hotel from the luxury version but don\'t change anything else."'
+                placeholder="Try: &quot;Take the hotel from the luxury version but don&apos;t change anything else.&quot;"
                 className="h-11 bg-background"
               />
               <Button onClick={run} className="h-11 px-5">Resolve</Button>

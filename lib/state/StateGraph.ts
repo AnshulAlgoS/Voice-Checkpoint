@@ -33,6 +33,16 @@ export class StateGraph<T extends SemanticState = SemanticState> {
     return { checkpoints: this.list(), activeCheckpointId: this.activeCheckpointId };
   }
 
+  restore(snapshot: GraphSnapshot<T>): void {
+    this.checkpoints = new Map(snapshot.checkpoints.map((item) => [item.id, clone(item)]));
+    this.activeCheckpointId = snapshot.activeCheckpointId;
+    this.sequence = snapshot.checkpoints.reduce((max, item) => Math.max(max, item.versionNumber), 0);
+    this.history = [];
+    if (this.activeCheckpointId && !this.checkpoints.has(this.activeCheckpointId)) {
+      throw new Error('Snapshot active checkpoint is missing.');
+    }
+  }
+
   create(state: T, meta: CheckpointMeta): Checkpoint<T> {
     this.saveUndoPoint();
     return this.commit(null, `branch-${this.sequence + 1}`, state, meta);
@@ -139,12 +149,5 @@ export class StateGraph<T extends SemanticState = SemanticState> {
 
   private saveUndoPoint(): void {
     this.history.push({ ...this.export(), sequence: this.sequence });
-  }
-
-  private restore(snapshot: GraphSnapshot<T>): void {
-    this.checkpoints = new Map(snapshot.checkpoints.map((item) => [item.id, clone(item)]));
-    this.activeCheckpointId = snapshot.activeCheckpointId;
-    this.sequence = snapshot.checkpoints.reduce((max, item) => Math.max(max, item.versionNumber), 0);
-    if (this.activeCheckpointId && !this.checkpoints.has(this.activeCheckpointId)) throw new Error('Snapshot active checkpoint is missing.');
   }
 }

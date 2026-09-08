@@ -218,7 +218,7 @@ export class VoiceIntentResolver<T extends SemanticState = SemanticState> {
       return { kind: 'resolved', operation: { type: 'UNDO' } };
     }
 
-    if (/compare|mukabla|muqabla|kya antar hai|difference|kya farak hai|compare karo|tulna/i.test(text)) {
+    if (/compare|mukabla|muqabla|kya antar hai|difference|kya farak hai|compare karo|tulna|what changed|kya badla/i.test(text)) {
       if (!active) return clarify('Which two versions should I compare?', checkpoints.map((c) => ({ id: c.id, label: c.label, versionNumber: c.versionNumber, whyMatched: ['all'] })));
       const candidates = this.refs.resolve(text, checkpoints, activeCheckpointId, { excludeActive: true });
       if (candidates.length === 1) {
