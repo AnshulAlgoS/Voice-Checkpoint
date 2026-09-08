@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownToLine,
   AudioLines,
@@ -9,6 +9,7 @@ import {
   History,
   Info,
   Mic,
+  MicOff,
   RefreshCcw,
   RotateCcw,
   Sparkles,
@@ -30,6 +31,11 @@ import { GenerationGate } from '@/lib/voice/GenerationGate';
 import { VoiceIntentResolver } from '@/lib/voice/VoiceIntentResolver';
 import { VoiceOrchestrator } from '@/lib/voice/VoiceOrchestrator';
 import { ResponsePlanner } from '@/lib/voice/ResponsePlanner';
+import {
+  createVoiceInputProvider,
+  type VoiceInputEvent,
+  type VoiceInputProvider,
+} from '@/lib/voice/VoiceInputProvider';
 import {
   createVoiceOutputProvider,
   type VoiceOutputStatus,
@@ -151,6 +157,8 @@ function opInfoFromResult(
   return { ...EMPTY_LAST_OP, resolution: result.result.resolution };
 }
 
+type InputStatus = ReturnType<VoiceInputProvider['getStatus']>;
+
 export function VoiceCheckpoint() {
   const [engine] = useState(createDemoGraph);
   const resolver = useMemo(() => new VoiceIntentResolver<TripState>(), []);
@@ -162,6 +170,7 @@ export function VoiceCheckpoint() {
     () => new VoicePipeline<TripState>(orch, planner, provider, gate, engine),
     [orch, planner, provider, gate, engine],
   );
+  const [inputProvider] = useState<VoiceInputProvider>(() => createVoiceInputProvider());
 
   const [snapshot, setSnapshot] = useState<GraphSnapshot<TripState>>(engine.export());
   const [diff, setDiff] = useState<StateDiff | null>(null);
@@ -169,118 +178,227 @@ export function VoiceCheckpoint() {
   const [transcriptLog, setTranscriptLog] = useState<TranscriptItem[]>([]);
   const [notice, setNotice] = useState<{ kind: 'ok' | 'err' | 'info' | 'warn'; text: string }>({
     kind: 'info',
-    text: 'Version A is active and isolated. Type a command or click Demo Reset.',
+    text: 'Version A is active and isolated. Type a command, enable microphone, or click Demo Reset.',
   });
   const [lastOp, setLastOp] = useState<LastOpInfo>(EMPTY_LAST_OP);
   const [lastResult, setLastResult] = useState<PipelineStepResult<TripState> | null>(null);
   const [lastTaskGeneration, setLastTaskGeneration] = useState<string>('');
   const [wasStale, setWasStale] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<VoiceOutputStatus>(() => provider.getStatus());
+  const [voiceInputStatus, setVoiceInputStatus] = useState<InputStatus>(() => inputProvider.getStatus());
+  const [interimTranscript, setInterimTranscript] = useState<string>('');
   const [tick, setTick] = useState(0);
   const [demoStepIndex, setDemoStepIndex] = useState(0);
+  const [micBusy, setMicBusy] = useState(false);
 
   const active = snapshot.checkpoints.find((c) => c.id === snapshot.activeCheckpointId) ?? null;
+
+  const runCommandRef = useRef<(text?: string) => Promise<void>>(async () => {});
+
+  useEffect(() => {
+    let settled = false;
+    function onInputEvent(ev: VoiceInputEvent) {
+      if (settled) return;
+      switch (ev.type) {
+        case 'connection':
+          setVoiceInputStatus(inputProvider.getStatus());
+          if (ev.connection === 'connected') {
+            setNotice({
+              kind: 'ok',
+              text:
+                inputProvider.kind === 'livekit'
+                  ? 'LiveKit connected. Microphone is active. Speak a command.'
+                  : 'Mock voice input ready.',
+            });
+          } else if (ev.connection === 'disconnected') {
+            setNotice({
+              kind: 'info',
+              text: 'Voice input disconnected.',
+            });
+          }
+          break;
+        case 'vad_start':
+        case 'turn_start':
+          setNotice({
+            kind: 'info',
+            text: 'Listening…',
+          });
+          void (async () => {
+            try {
+              await pipeline.interrupt();
+              setVoiceStatus(provider.getStatus());
+            } catch {
+              /* ignore interrupt race errors */
+            }
+          })();
+          break;
+        case 'interim_transcript':
+          if (ev.transcript) setInterimTranscript(ev.transcript);
+          break;
+        case 'final_transcript':
+          if (ev.transcript) {
+            setInterimTranscript('');
+            void runCommandRef.current(ev.transcript);
+          }
+          break;
+        case 'turn_end':
+          setInterimTranscript('');
+          if (ev.message) {
+            setVoiceInputStatus(inputProvider.getStatus());
+          }
+          break;
+        case 'vad_end':
+          break;
+        case 'error':
+          setVoiceInputStatus(inputProvider.getStatus());
+          setNotice({
+            kind: 'err',
+            text: ev.message ?? 'Voice input error.',
+          });
+          break;
+      }
+    }
+    const unsub = inputProvider.subscribe(onInputEvent);
+    return () => {
+      settled = true;
+      unsub();
+    };
+  }, [inputProvider, pipeline, provider]);
 
   useEffect(() => {
     const id = window.setInterval(() => {
       setVoiceStatus(provider.getStatus());
+      setVoiceInputStatus(inputProvider.getStatus());
       setTick((t) => t + 1);
     }, 250);
     return () => window.clearInterval(id);
-  }, [provider]);
+  }, [provider, inputProvider]);
+
+  async function toggleMic() {
+    setMicBusy(true);
+    try {
+      if (voiceInputStatus.connected) {
+        await inputProvider.stop();
+      } else {
+        try {
+          await inputProvider.start();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          setNotice({
+            kind: 'err',
+            text: `Could not start voice input: ${msg}`,
+          });
+          throw err;
+        }
+      }
+    } finally {
+      setMicBusy(false);
+      setVoiceInputStatus(inputProvider.getStatus());
+    }
+  }
 
   const currentGeneration = gate.currentGeneration;
   void tick;
 
-  function applyResult(result: PipelineStepResult<TripState>) {
-    setLastResult(result);
-    setLastTaskGeneration(result.orchestration.generation);
-    setWasStale(result.orchestration.isStale);
-    setLastOp(opInfoFromResult(result.orchestration));
+  const applyResult = useCallback(
+    (result: PipelineStepResult<TripState>) => {
+      setLastResult(result);
+      setLastTaskGeneration(result.orchestration.generation);
+      setWasStale(result.orchestration.isStale);
+      setLastOp(opInfoFromResult(result.orchestration));
 
-    if (result.orchestration.isStale) {
-      setNotice({
-        kind: 'warn',
-        text: `Stale response (${result.orchestration.generation}) discarded. Current is ${currentGeneration}.`,
-      });
-      return;
-    }
-
-    const inner = result.orchestration.result;
-    if (inner.kind === 'executed') {
-      setSnapshot(inner.execution.snapshot);
-      setDiff(inner.execution.diff ?? null);
-      if (result.plannedText) {
-        setTranscriptLog((prev) => [
-          ...prev,
-          {
-            id: `a-${Date.now()}`,
-            kind: 'assistant',
-            text: result.plannedText!,
-            time: new Date().toLocaleTimeString(),
-            generation: result.orchestration.generation,
-          },
-        ]);
-      }
-      if (inner.resolution.kind === 'resolved') {
+      if (result.orchestration.isStale) {
         setNotice({
-          kind: 'ok',
-          text: `${inner.resolution.operation.type.replaceAll('_', ' ').toLowerCase()} applied. Generation ${result.orchestration.generation}.`,
+          kind: 'warn',
+          text: `Stale response (${result.orchestration.generation}) discarded. Current is ${currentGeneration}.`,
         });
-      } else {
-        setNotice({ kind: 'info', text: inner.resolution.kind });
+        return;
       }
-    } else {
-      if (inner.resolution.kind === 'clarification') {
-        const q = inner.resolution.question;
-        setNotice({ kind: 'warn', text: q });
-        setTranscriptLog((prev) => [
-          ...prev,
-          {
-            id: `a-${Date.now()}`,
-            kind: 'assistant',
-            text: `Clarification needed: ${q}`,
-            time: new Date().toLocaleTimeString(),
-            generation: result.orchestration.generation,
-          },
-        ]);
-      } else if (inner.resolution.kind === 'unsupported') {
-        const rsn = inner.resolution.reason;
-        setNotice({ kind: 'err', text: rsn });
-        setTranscriptLog((prev) => [
-          ...prev,
-          {
-            id: `a-${Date.now()}`,
-            kind: 'assistant',
-            text: `Unsupported: ${rsn}`,
-            time: new Date().toLocaleTimeString(),
-            generation: result.orchestration.generation,
-          },
-        ]);
-      }
-    }
-    setVoiceStatus(provider.getStatus());
-  }
 
-  async function runCommand(text?: string) {
-    const useText = (text ?? transcript).trim();
-    if (!useText) {
-      setNotice({ kind: 'info', text: 'Enter a command transcript first.' });
-      return;
-    }
-    setTranscriptLog((prev) => [
-      ...prev,
-      {
-        id: `u-${Date.now()}`,
-        kind: 'user',
-        text: useText,
-        time: new Date().toLocaleTimeString(),
-      },
-    ]);
-    if (text === undefined) setTranscript('');
-    const result = await pipeline.submit(useText);
-    applyResult(result);
-  }
+      const inner = result.orchestration.result;
+      if (inner.kind === 'executed') {
+        setSnapshot(inner.execution.snapshot);
+        setDiff(inner.execution.diff ?? null);
+        if (result.plannedText) {
+          setTranscriptLog((prev) => [
+            ...prev,
+            {
+              id: `a-${Date.now()}`,
+              kind: 'assistant',
+              text: result.plannedText!,
+              time: new Date().toLocaleTimeString(),
+              generation: result.orchestration.generation,
+            },
+          ]);
+        }
+        if (inner.resolution.kind === 'resolved') {
+          setNotice({
+            kind: 'ok',
+            text: `${inner.resolution.operation.type.replaceAll('_', ' ').toLowerCase()} applied. Generation ${result.orchestration.generation}.`,
+          });
+        } else {
+          setNotice({ kind: 'info', text: inner.resolution.kind });
+        }
+      } else {
+        if (inner.resolution.kind === 'clarification') {
+          const q = inner.resolution.question;
+          setNotice({ kind: 'warn', text: q });
+          setTranscriptLog((prev) => [
+            ...prev,
+            {
+              id: `a-${Date.now()}`,
+              kind: 'assistant',
+              text: `Clarification needed: ${q}`,
+              time: new Date().toLocaleTimeString(),
+              generation: result.orchestration.generation,
+            },
+          ]);
+        } else if (inner.resolution.kind === 'unsupported') {
+          const rsn = inner.resolution.reason;
+          setNotice({ kind: 'err', text: rsn });
+          setTranscriptLog((prev) => [
+            ...prev,
+            {
+              id: `a-${Date.now()}`,
+              kind: 'assistant',
+              text: `Unsupported: ${rsn}`,
+              time: new Date().toLocaleTimeString(),
+              generation: result.orchestration.generation,
+            },
+          ]);
+        }
+      }
+      setVoiceStatus(provider.getStatus());
+    },
+    [currentGeneration, provider],
+  );
+
+  const runCommand = useCallback(
+    async (text?: string) => {
+      const useText = (text ?? transcript).trim();
+      if (!useText) {
+        setNotice({ kind: 'info', text: 'Enter a command transcript first.' });
+        return;
+      }
+      setTranscriptLog((prev) => [
+        ...prev,
+        {
+          id: `u-${Date.now()}`,
+          kind: 'user',
+          text: useText,
+          time: new Date().toLocaleTimeString(),
+        },
+      ]);
+      if (text === undefined) setTranscript('');
+      const result = await pipeline.submit(useText);
+      applyResult(result);
+    },
+    [transcript, pipeline, applyResult],
+  );
+
+  useEffect(() => {
+    runCommandRef.current = runCommand;
+  }, [runCommand]);
 
   async function interrupt() {
     await pipeline.interrupt();
@@ -465,22 +583,48 @@ export function VoiceCheckpoint() {
                 </div>
 
                 <div className="flex flex-col gap-2 sm:flex-row">
-                  <Input
-                    value={transcript}
-                    onChange={(e) => setTranscript(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        void runCommand();
+                  <div className="flex flex-1 flex-col gap-1">
+                    <Input
+                      value={transcript}
+                      onChange={(e) => setTranscript(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          void runCommand();
+                        }
+                      }}
+                      placeholder={
+                        interimTranscript
+                          ? `🎙 ${interimTranscript}`
+                          : 'Try: "Make another version assuming I can spend sixty thousand and prioritize comfort."'
                       }
-                    }}
-                    placeholder='Try: "Make another version assuming I can spend sixty thousand and prioritize comfort."'
-                    aria-label="Semantic state transcript"
-                    className="h-11 bg-background"
-                  />
-                  <Button onClick={() => void runCommand()} className="h-11 px-5">
-                    Resolve & Speak
-                  </Button>
+                      aria-label="Semantic state transcript"
+                      className={`h-11 bg-background ${interimTranscript ? 'text-cyan-300' : ''}`}
+                    />
+                    {interimTranscript ? (
+                      <p className="px-1 text-[11px] text-cyan-300/80">
+                        hearing: {interimTranscript}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex flex-row gap-1.5">
+                    <Button
+                      variant={voiceInputStatus.connected ? 'destructive' : 'outline'}
+                      onClick={() => void toggleMic()}
+                      disabled={micBusy}
+                      className="h-11 shrink-0 px-3"
+                      aria-label={voiceInputStatus.connected ? 'Stop microphone' : 'Enable microphone'}
+                    >
+                      {voiceInputStatus.connected ? (
+                        <MicOff className="size-4" />
+                      ) : (
+                        <Mic className="size-4" />
+                      )}
+                    </Button>
+                    <Button onClick={() => void runCommand()} className="h-11 px-5 shrink-0">
+                      Resolve &amp; Speak
+                    </Button>
+                  </div>
                 </div>
                 <Alert
                   variant={notice.kind === 'err' ? 'destructive' : 'default'}
@@ -779,6 +923,61 @@ export function VoiceCheckpoint() {
                   </TabsContent>
                 </Tabs>
               )}
+            </Card>
+
+            <Card className="rounded-[1.3rem] border border-border bg-card p-5 md:p-6">
+              <div className="mb-3 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {voiceInputStatus.capturing ? (
+                    <Mic className="size-5 text-cyan-400" />
+                  ) : (
+                    <MicOff className="size-5 text-muted-foreground" />
+                  )}
+                  <h2 className="text-base font-semibold">Voice input</h2>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={`text-[10px] ${
+                    voiceInputStatus.connected
+                      ? inputProvider.kind === 'livekit'
+                        ? 'border-cyan-400/40 bg-cyan-400/10 text-cyan-300'
+                        : 'border-emerald-400/40 bg-emerald-400/10 text-emerald-300'
+                      : 'border-muted-foreground/40 bg-muted-foreground/10 text-muted-foreground'
+                  }`}
+                >
+                  {voiceInputStatus.connected
+                    ? inputProvider.kind === 'livekit'
+                      ? 'LIVEKIT LIVE'
+                      : 'MOCK READY'
+                    : 'DISCONNECTED'}
+                </Badge>
+              </div>
+              <div className="grid grid-cols-2 gap-2.5 text-xs">
+                <div className="rounded-xl border border-border bg-muted/30 p-3">
+                  <p className="mb-1 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+                    Connection
+                  </p>
+                  <p className={`text-sm font-semibold ${voiceInputStatus.connected ? 'text-emerald-300' : 'text-muted-foreground'}`}>
+                    {voiceInputStatus.connected ? 'CONNECTED' : 'idle'}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-border bg-muted/30 p-3">
+                  <p className="mb-1 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+                    Microphone
+                  </p>
+                  <p className={`text-sm font-semibold ${voiceInputStatus.capturing ? 'text-cyan-300' : 'text-muted-foreground'}`}>
+                    {voiceInputStatus.capturing ? 'CAPTURING' : 'off'}
+                  </p>
+                </div>
+                <div className="col-span-2 rounded-xl border border-border bg-muted/30 p-3">
+                  <p className="mb-1 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+                    Last transcript
+                  </p>
+                  <p className="text-xs leading-relaxed">
+                    {voiceInputStatus.lastTranscript ?? 'No speech yet. Click mic to enable.'}
+                  </p>
+                </div>
+              </div>
             </Card>
 
             <Card className="rounded-[1.3rem] border border-border bg-card p-5 md:p-6">

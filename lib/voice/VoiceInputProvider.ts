@@ -1,3 +1,10 @@
+import type {
+  Room,
+  RemoteParticipant,
+  RemoteTrack,
+  RemoteTrackPublication,
+} from 'livekit-client';
+
 export type VoiceInputEventType =
   | 'connection'
   | 'turn_start'
@@ -37,6 +44,7 @@ interface LiveKitSttOptions {
   language?: string;
   roomName?: string;
   participantName?: string;
+  tokenEndpoint?: string;
 }
 
 function readEnv(key: string): string | undefined {
@@ -103,6 +111,14 @@ export class MockVoiceInputProvider implements VoiceInputProvider {
   }
 }
 
+interface SttDataMessage {
+  type?: 'interim_transcript' | 'final_transcript' | 'vad_start' | 'vad_end' | 'turn_start' | 'turn_end';
+  text?: string;
+  transcript?: string;
+  segment_id?: string;
+  final?: boolean;
+}
+
 export class LiveKitSttProvider implements VoiceInputProvider {
   readonly kind = 'livekit' as const;
 
@@ -114,12 +130,15 @@ export class LiveKitSttProvider implements VoiceInputProvider {
     language: string;
     roomName: string;
     participantName: string;
+    tokenEndpoint: string;
   };
 
   private readonly listeners = new Set<VoiceInputListener>();
   private connected = false;
   private capturing = false;
   private lastTranscript: string | null = null;
+  private room: Room | null = null;
+  private roomCleanup: Array<() => void> = [];
 
   constructor(options: LiveKitSttOptions = {}) {
     this.opts = {
@@ -130,6 +149,7 @@ export class LiveKitSttProvider implements VoiceInputProvider {
       language: options.language ?? readEnv('RIME_LANGUAGE') ?? 'en-IN',
       roomName: options.roomName ?? 'voice-checkpoint',
       participantName: options.participantName ?? 'judge',
+      tokenEndpoint: options.tokenEndpoint ?? '/api/livekit-token',
     };
   }
 
@@ -144,22 +164,191 @@ export class LiveKitSttProvider implements VoiceInputProvider {
     };
   }
 
+  private async fetchToken(): Promise<string> {
+    const endpoint = new URL(this.opts.tokenEndpoint, typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
+    endpoint.searchParams.set('room', this.opts.roomName);
+    endpoint.searchParams.set('participant', this.opts.participantName);
+    const res = await fetch(endpoint.toString(), {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(`Token endpoint failed: ${res.status} ${(body as { error?: string }).error ?? res.statusText}`);
+    }
+    const json = (await res.json()) as { token: string };
+    if (!json.token) throw new Error('Token endpoint returned no token.');
+    return json.token;
+  }
+
   async start(): Promise<void> {
-    if (!this.opts.livekitUrl || !this.opts.livekitApiKey || !this.opts.livekitApiSecret) {
+    if (!this.opts.livekitUrl) {
       const at = Date.now();
-      this.emit({ type: 'error', at, message: 'LiveKitSttProvider: LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must be configured.' });
+      this.emit({ type: 'error', at, message: 'LiveKitSttProvider: LIVEKIT_URL must be configured (server-side via env or options).' });
       throw new Error(
-        'LiveKitSttProvider: LIVEKIT_URL, LIVEKIT_API_KEY, and LIVEKIT_API_SECRET must be configured.',
+        'LiveKitSttProvider: LIVEKIT_URL must be configured (server-side via env or options).',
       );
     }
+
     this.emit({ type: 'connection', at: Date.now(), connection: 'connecting' });
+
+    let RoomCtor: typeof Room | null = null;
+    let TrackPub: typeof import('livekit-client').Track | null = null;
+    let RoomEventCtor: typeof import('livekit-client').RoomEvent | null = null;
+    try {
+      const lk = await import('livekit-client');
+      RoomCtor = lk.Room;
+      TrackPub = lk.Track;
+      RoomEventCtor = lk.RoomEvent;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const at = Date.now();
+      this.emit({ type: 'error', at, message: `LiveKit SDK failed to load: ${msg}` });
+      throw new Error(`LiveKit SDK failed to load: ${msg}`);
+    }
+
+    let token: string;
+    try {
+      token = await this.fetchToken();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const at = Date.now();
+      this.emit({ type: 'connection', at, connection: 'disconnected' });
+      this.emit({ type: 'error', at, message: `LiveKit token error: ${msg}` });
+      throw new Error(`LiveKit token error: ${msg}`);
+    }
+
+    const room = new RoomCtor({
+      adaptiveStream: true,
+      dynacast: true,
+    });
+    this.room = room;
+
+    const onData = (payload: Uint8Array, participant: RemoteParticipant | undefined) => {
+      void participant;
+      this.handleSttData(payload);
+    };
+    const onDisconnect = () => {
+      this.connected = false;
+      this.capturing = false;
+      this.emit({ type: 'connection', at: Date.now(), connection: 'disconnected' });
+    };
+    const onTrackSubscribed = (
+      track: RemoteTrack,
+      _pub: RemoteTrackPublication,
+      _participant: RemoteParticipant,
+    ) => {
+      void track;
+      void _pub;
+      void _participant;
+    };
+    type RoomEventKey = keyof import('livekit-client').RoomEventCallbacks;
+    room.on(RoomEventCtor.DataReceived as RoomEventKey, onData as never);
+    room.on(RoomEventCtor.Disconnected as RoomEventKey, onDisconnect as never);
+    room.on(RoomEventCtor.TrackSubscribed as RoomEventKey, onTrackSubscribed as never);
+    this.roomCleanup.push(() => {
+      try { room.off(RoomEventCtor!.DataReceived as RoomEventKey, onData as never); } catch { /* noop */ }
+      try { room.off(RoomEventCtor!.Disconnected as RoomEventKey, onDisconnect as never); } catch { /* noop */ }
+      try { room.off(RoomEventCtor!.TrackSubscribed as RoomEventKey, onTrackSubscribed as never); } catch { /* noop */ }
+    });
+
+    try {
+      await room.connect(this.opts.livekitUrl, token);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.cleanupRoom();
+      const at = Date.now();
+      this.emit({ type: 'connection', at, connection: 'disconnected' });
+      this.emit({ type: 'error', at, message: `LiveKit connect error: ${msg}` });
+      throw new Error(`LiveKit connect error: ${msg}`);
+    }
+
     this.connected = true;
-    this.capturing = true;
     this.emit({ type: 'connection', at: Date.now(), connection: 'connected' });
+
+    try {
+      if (TrackPub) {
+        await room.localParticipant.setMicrophoneEnabled(true);
+      }
+      this.capturing = true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.capturing = false;
+      const at = Date.now();
+      this.emit({ type: 'error', at, message: `Microphone permission/error: ${msg}` });
+    }
+  }
+
+  private handleSttData(payload: Uint8Array): void {
+    let parsed: SttDataMessage | null = null;
+    try {
+      const decoder = new TextDecoder('utf-8');
+      const text = decoder.decode(payload);
+      parsed = JSON.parse(text) as SttDataMessage;
+    } catch {
+      try {
+        const decoder = new TextDecoder('utf-8');
+        parsed = { type: 'interim_transcript', text: decoder.decode(payload) };
+      } catch {
+        return;
+      }
+    }
+    if (!parsed) return;
+
+    const at = Date.now();
+    const transcriptText = parsed.transcript ?? parsed.text ?? '';
+    const typeHint = parsed.type;
+
+    switch (typeHint) {
+      case 'turn_start':
+        this.emit({ type: 'turn_start', at });
+        break;
+      case 'vad_start':
+        this.emit({ type: 'vad_start', at });
+        break;
+      case 'interim_transcript':
+        if (transcriptText) {
+          this.emit({ type: 'interim_transcript', at, transcript: transcriptText });
+        }
+        break;
+      case 'final_transcript': {
+        const final = parsed.final !== false;
+        void final;
+        if (transcriptText) {
+          this.lastTranscript = transcriptText;
+          this.emit({ type: 'final_transcript', at, transcript: transcriptText });
+        }
+        break;
+      }
+      case 'vad_end':
+        this.emit({ type: 'vad_end', at });
+        break;
+      case 'turn_end':
+        this.emit({ type: 'turn_end', at, message: transcriptText || undefined });
+        break;
+      default:
+        if (parsed.final === true && transcriptText) {
+          this.lastTranscript = transcriptText;
+          this.emit({ type: 'final_transcript', at, transcript: transcriptText });
+        } else if (transcriptText && parsed.final !== true) {
+          this.emit({ type: 'interim_transcript', at, transcript: transcriptText });
+        }
+        break;
+    }
+  }
+
+  private cleanupRoom(): void {
+    for (const fn of this.roomCleanup) { try { fn(); } catch { /* noop */ } }
+    this.roomCleanup = [];
+    if (this.room) {
+      try { this.room.disconnect(); } catch { /* noop */ }
+      this.room = null;
+    }
   }
 
   async stop(): Promise<void> {
     this.capturing = false;
+    this.cleanupRoom();
     this.connected = false;
     this.emit({ type: 'connection', at: Date.now(), connection: 'disconnected' });
   }
