@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowDownToLine,
   AudioLines,
@@ -32,7 +32,6 @@ import { VoiceOrchestrator } from '@/lib/voice/VoiceOrchestrator';
 import { ResponsePlanner } from '@/lib/voice/ResponsePlanner';
 import {
   createVoiceOutputProvider,
-  type VoiceOutputProvider,
   type VoiceOutputStatus,
 } from '@/lib/voice/VoiceOutputProvider';
 import { VoicePipeline, type PipelineStepResult } from '@/lib/voice/VoicePipeline';
@@ -43,7 +42,6 @@ import {
   type TripState,
 } from '@/lib/demo';
 import type {
-  Checkpoint,
   GraphSnapshot,
   StateDiff,
   StateOperation,
@@ -159,11 +157,7 @@ export function VoiceCheckpoint() {
   const [gate] = useState(() => new GenerationGate());
   const orch = useMemo(() => new VoiceOrchestrator<TripState>(resolver, gate), [resolver, gate]);
   const planner = useMemo(() => new ResponsePlanner<TripState>(), []);
-  const providerRef = useRef<VoiceOutputProvider | null>(null);
-  if (!providerRef.current) {
-    providerRef.current = createVoiceOutputProvider({ mockDelayMs: 30 });
-  }
-  const provider = providerRef.current;
+  const [provider] = useState(() => createVoiceOutputProvider({ mockDelayMs: 30 }));
   const pipeline = useMemo(
     () => new VoicePipeline<TripState>(orch, planner, provider, gate, engine),
     [orch, planner, provider, gate, engine],
@@ -181,7 +175,7 @@ export function VoiceCheckpoint() {
   const [lastResult, setLastResult] = useState<PipelineStepResult<TripState> | null>(null);
   const [lastTaskGeneration, setLastTaskGeneration] = useState<string>('');
   const [wasStale, setWasStale] = useState(false);
-  const [voiceStatus, setVoiceStatus] = useState<VoiceOutputStatus>(provider.getStatus());
+  const [voiceStatus, setVoiceStatus] = useState<VoiceOutputStatus>(() => provider.getStatus());
   const [tick, setTick] = useState(0);
   const [demoStepIndex, setDemoStepIndex] = useState(0);
 

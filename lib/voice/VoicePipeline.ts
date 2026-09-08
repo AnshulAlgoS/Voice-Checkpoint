@@ -1,4 +1,4 @@
-import type { OperationResult, SemanticState } from '../state/types.ts';
+import type { SemanticState } from '../state/types.ts';
 import type { StateGraph } from '../state/StateGraph.ts';
 import type { GenerationGate } from './GenerationGate.ts';
 import type { OrchestratorResult } from './VoiceOrchestrator.ts';
@@ -66,7 +66,7 @@ export class VoicePipeline<T extends SemanticState = SemanticState> {
     const generation = this.gate.issueToken();
     const cancelledHandle = await this.cancelPriorIfStale();
 
-    const checkpoints = this.graph.list();
+    const _checkpoints = this.graph.list();
     const activeCheckpointIdBefore = this.graph.active?.id ?? null;
 
     const orchestration = this.orch.orchestrate(transcript, this.graph, { generation });

@@ -12,7 +12,6 @@ function InputGroup({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
       data-slot="input-group"
-      role="group"
       className={cn(
         'border-input dark:bg-input/30 has-[[data-slot=input-group-control]:focus-visible]:border-ring has-[[data-slot=input-group-control]:focus-visible]:ring-ring/50 has-[[data-slot][aria-invalid=true]]:ring-destructive/20 has-[[data-slot][aria-invalid=true]]:border-destructive dark:has-[[data-slot][aria-invalid=true]]:ring-destructive/40 has-disabled:bg-input/50 dark:has-disabled:bg-input/80 h-8 rounded-lg border transition-colors in-data-[slot=combobox-content]:focus-within:border-inherit in-data-[slot=combobox-content]:focus-within:ring-0 has-disabled:opacity-50 has-[[data-slot=input-group-control]:focus-visible]:ring-3 has-[[data-slot][aria-invalid=true]]:ring-3 has-[>[data-align=block-end]]:h-auto has-[>[data-align=block-end]]:flex-col has-[>[data-align=block-start]]:h-auto has-[>[data-align=block-start]]:flex-col has-[>[data-align=block-end]]:[&>input]:pt-3 has-[>[data-align=block-start]]:[&>input]:pb-3 has-[>[data-align=inline-end]]:[&>input]:pr-1.5 has-[>[data-align=inline-start]]:[&>input]:pl-1.5 group/input-group relative flex w-full min-w-0 items-center outline-none has-[>textarea]:h-auto',
         className,
@@ -46,21 +45,32 @@ const inputGroupAddonVariants = cva(
 function InputGroupAddon({
   className,
   align = 'inline-start',
+  onKeyDown,
+  onClick,
   ...props
-}: React.ComponentProps<'div'> & VariantProps<typeof inputGroupAddonVariants>) {
+}: React.ComponentProps<'button'> & VariantProps<typeof inputGroupAddonVariants> & { type?: 'button' | 'submit' | 'reset' }) {
   return (
-    <div
-      role="group"
+    <button
+      type="button"
       data-slot="input-group-addon"
       data-align={align}
-      className={cn(inputGroupAddonVariants({ align }), className)}
+      className={cn(inputGroupAddonVariants({ align }), 'appearance-none bg-transparent border-0 outline-none rounded-inherit', className)}
       onClick={(e) => {
-        if ((e.target as HTMLElement).closest('button')) {
+        if ((e.target as HTMLElement).closest('button[type]') && (e.target as HTMLElement).tagName === 'BUTTON' && e.currentTarget !== e.target) {
+          onClick?.(e);
           return;
         }
         e.currentTarget.parentElement?.querySelector('input')?.focus();
+        onClick?.(e);
       }}
-      {...props}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          e.currentTarget.parentElement?.querySelector('input')?.focus();
+        }
+        onKeyDown?.(e);
+      }}
+      {...(props as React.ComponentProps<'button'>)}
     />
   );
 }

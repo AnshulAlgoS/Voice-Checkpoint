@@ -1,4 +1,4 @@
-import type { Checkpoint, OperationResult, SemanticState, StateDiff } from '../state/types.ts';
+import type { Checkpoint, SemanticState, StateDiff } from '../state/types.ts';
 import type { OrchestratorResult } from './VoiceOrchestrator.ts';
 import type { ResolutionResult } from './types.ts';
 
@@ -129,7 +129,7 @@ export class ResponsePlanner<T extends SemanticState = SemanticState> {
     const opType = execution.operation;
 
     let text: string;
-    let checkpointId: string | null = execution.checkpoint?.id ?? opts.activeCheckpointId;
+    const checkpointId: string | null = execution.checkpoint?.id ?? opts.activeCheckpointId;
 
     switch (opType) {
       case 'CREATE_CHECKPOINT': {

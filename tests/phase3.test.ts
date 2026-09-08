@@ -10,18 +10,17 @@ import {
   RimeVoiceOutputProvider,
   createVoiceOutputProvider,
   hasRimeCredentials,
-  type VoiceOutputProvider,
   type VoiceOutputContext,
 } from '../lib/voice/VoiceOutputProvider.ts';
-import { VoicePipeline, type PipelineStepResult } from '../lib/voice/VoicePipeline.ts';
+import { VoicePipeline } from '../lib/voice/VoicePipeline.ts';
 import {
   createDemoGraph,
   DEMO_SEQUENCE,
-  INITIAL_DEMO_SNAPSHOT,
   resetDemoGraph,
   type TripState,
 } from '../lib/demo.ts';
-import type { Checkpoint, GraphSnapshot } from '../lib/state/types.ts';
+import type { GenerationToken } from '../lib/voice/types.ts';
+import type { GraphSnapshot } from '../lib/state/types.ts';
 
 function snapshotsEquivalent(a: GraphSnapshot<TripState>, b: GraphSnapshot<TripState>): boolean {
   if (a.activeCheckpointId !== b.activeCheckpointId) return false;
@@ -119,7 +118,7 @@ test('Phase 3 ResponsePlanner: stale result returns null', () => {
 });
 
 test('Phase 3 ResponsePlanner: FORK mentions budget and comfort', () => {
-  const { orch, engine, planner, gate } = buildPipeline();
+  const { orch, engine, planner, gate: _gate } = buildPipeline();
   const result = orch.orchestrate(
     'Make another version assuming I can spend sixty thousand and prioritize comfort.',
     engine,
@@ -226,7 +225,7 @@ test('Phase 3 ResponsePlanner: clarification and unsupported produce non-empty t
         resolution: { kind: 'clarification', question: 'Which checkpoint?', candidates: [] },
       },
       isStale: false,
-      generation: 'gen-1',
+      generation: 'gen-1' as GenerationToken,
     },
     { activeCheckpointId: 'cp-1', checkpoints: [] },
   );
@@ -238,7 +237,7 @@ test('Phase 3 ResponsePlanner: clarification and unsupported produce non-empty t
         resolution: { kind: 'unsupported', reason: 'Cannot book flights' },
       },
       isStale: false,
-      generation: 'gen-2',
+      generation: 'gen-2' as GenerationToken,
     },
     { activeCheckpointId: 'cp-1', checkpoints: [] },
   );
@@ -252,7 +251,7 @@ test('Phase 3 interruption: newer submit supersedes older playback', async () =>
   );
   await new Promise((r) => setTimeout(r, 5));
   const fast = await pipeline.submit('Change the budget to fifty thousand.');
-  const slowDone = await slow;
+  const _slowDone = await slow;
   assert.equal(fast.orchestration.isStale, false);
   const log = provider.getSpokenLog();
   const last = log[log.length - 1];
